@@ -18,7 +18,7 @@ import json
 from django.contrib import messages
 from django.contrib.auth import login as auth_login
 from django.contrib.auth.decorators import login_required
-from django.http import HttpResponse, HttpResponseRedirect, JsonResponse
+from django.http import Http404, HttpResponse, HttpResponseRedirect, JsonResponse
 from django.shortcuts import get_object_or_404, render
 from django.urls import reverse
 from django.views.decorators.http import require_http_methods
@@ -552,6 +552,28 @@ def document_download(request, pk, doc_pk):
     filename = f"{project.pk}_{document.kind}_{document.pk}.md"
     if request.GET.get("download") == "1":
         response["Content-Disposition"] = f'attachment; filename="{filename}"'
+    return response
+
+
+@require_http_methods(["GET"])
+@login_required
+def document_drawio(request, pk, doc_pk):
+    """Download a diagram document as an editable draw.io (.drawio) file.
+
+    Generated deterministically from the project's fields (same source as the
+    stored Mermaid), so it always reflects the current answers.
+    """
+
+    from .generators import drawio
+
+    project = _owned_project(request, pk)
+    document = get_object_or_404(Document, pk=doc_pk, project=project)
+    xml = drawio.for_kind(document.kind, project)
+    if xml is None:
+        raise Http404("This document is not a diagram.")
+    response = HttpResponse(xml, content_type="application/xml; charset=utf-8")
+    filename = f"{project.pk}_{document.kind}_{document.pk}.drawio"
+    response["Content-Disposition"] = f'attachment; filename="{filename}"'
     return response
 
 

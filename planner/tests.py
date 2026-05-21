@@ -21,7 +21,7 @@ from django.test import TestCase, override_settings
 from django.urls import reverse
 
 from .forms import InterviewForm
-from .generators import diagrams, templates as tmpl_gen
+from .generators import diagrams, drawio, templates as tmpl_gen
 from .generators import (
     DEFAULT_TITLES,
     generate_all, generate_custom, sync_default_documents,
@@ -200,7 +200,91 @@ class DiagramTests(TestCase):
     def test_flow_has_start_and_features(self):
         m = diagrams.flow(self.project)
         self.assertIn("flowchart TD", m)
-        self.assertIn("Sign up", m) if False else self.assertIn("Discover", m)
+        self.assertIn("Discover", m)
+
+
+class DrawioTests(TestCase):
+    def setUp(self):
+        self.user = _make_user()
+        self.project = _make_project(self.user)
+
+    def _parse(self, xml):
+        """Assert the output is well-formed XML draw.io can open."""
+
+        from xml.etree import ElementTree as ET
+
+        root = ET.fromstring(xml)
+        self.assertEqual(root.tag, "mxfile")
+        return root
+
+    def test_use_case_is_valid_xml_with_actors_and_features(self):
+        xml = drawio.use_case(self.project)
+        self._parse(xml)
+        self.assertIn("Alice", xml)
+        self.assertIn("Create board", xml)
+        self.assertIn("umlActor", xml)
+
+    def test_erd_is_valid_xml_with_entities_and_relationship(self):
+        xml = drawio.erd(self.project)
+        self._parse(xml)
+        self.assertIn("Task", xml)
+        self.assertIn("Board", xml)
+        # Task.board references the Board entity -> a labeled relationship edge.
+        self.assertIn('value="board"', xml)
+        self.assertIn('edge="1"', xml)
+
+    def test_flow_is_valid_xml_with_journey(self):
+        xml = drawio.flow(self.project)
+        self._parse(xml)
+        self.assertIn("Discover", xml)
+        self.assertIn("Sign up", xml)
+
+    def test_for_kind_returns_none_for_non_diagram(self):
+        self.assertIsNone(drawio.for_kind(Document.KIND_BUSINESS_PLAN, self.project))
+
+    def test_labels_are_xml_escaped(self):
+        project = _make_project(self.user, name='A & B "x" <y>', features=["F"])
+        xml = drawio.use_case(project)
+        self._parse(xml)  # raises if &, <, > or " are not escaped
+        self.assertNotIn("A & B", xml)
+
+
+class DrawioDownloadTests(TestCase):
+    def setUp(self):
+        self.user = _make_user()
+        self.other = _make_user(username="mallory")
+        self.client.force_login(self.user)
+
+    def test_diagram_download_returns_drawio(self):
+        project = _make_project(self.user)
+        sync_default_documents(project)
+        doc = project.documents.get(kind=Document.KIND_ERD_DIAGRAM)
+        resp = self.client.get(
+            reverse("planner:document_drawio", args=[project.pk, doc.pk])
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn("application/xml", resp["Content-Type"])
+        self.assertIn(".drawio", resp["Content-Disposition"])
+        self.assertIn(b"mxGraphModel", resp.content)
+
+    def test_non_diagram_drawio_is_404(self):
+        project = _make_project(self.user)
+        sync_default_documents(project)
+        doc = project.documents.get(kind="business_plan")
+        resp = self.client.get(
+            reverse("planner:document_drawio", args=[project.pk, doc.pk])
+        )
+        self.assertEqual(resp.status_code, 404)
+
+    def test_drawio_scoped_to_owner(self):
+        project = _make_project(self.user)
+        sync_default_documents(project)
+        doc = project.documents.get(kind=Document.KIND_ERD_DIAGRAM)
+        self.client.force_login(self.other)
+        resp = self.client.get(
+            reverse("planner:document_drawio", args=[project.pk, doc.pk])
+        )
+        self.assertEqual(resp.status_code, 404)
 
 
 # ===========================================================================

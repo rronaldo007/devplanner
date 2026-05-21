@@ -84,4 +84,9 @@ urlpatterns = [
         views.document_download,
         name="document_download",
     ),
+    path(
+        "projects/<int:pk>/documents/<int:doc_pk>/drawio/",
+        views.document_drawio,
+        name="document_drawio",
+    ),
 ]

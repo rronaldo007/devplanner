@@ -20,6 +20,7 @@ planner/               # the single app
 │   ├── templates.py   # pure-Python doc generation (always works)
 │   ├── claude.py      # Anthropic-backed doc generation (optional)
 │   ├── diagrams.py    # deterministic Mermaid diagrams from project fields
+│   ├── drawio.py      # deterministic draw.io (mxGraph XML) versions of the diagrams
 │   └── chat.py        # intake chat + project assistant (Claude) + web search
 └── templates/planner/ # base, dashboard/, auth/, public/
 ```
