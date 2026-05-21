@@ -30,6 +30,25 @@ The UI is rendered with Tailwind via the Play CDN — no build step.
 
 ## Quick start
 
+### With Docker (recommended)
+
+```bash
+cp .env.example .env          # then edit .env (at minimum set DJANGO_SECRET_KEY)
+docker compose up --build
+```
+
+The web service runs on <http://127.0.0.1:8000/>. SQLite is persisted in
+the `devplanner-data` named volume so signups and projects survive container
+restarts.
+
+To swap SQLite for Postgres, uncomment `DATABASE_URL` in your `.env` and run:
+
+```bash
+docker compose --profile postgres up --build
+```
+
+### Without Docker
+
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
@@ -114,6 +133,22 @@ python manage.py test planner
 36 tests cover form parsing, template generation, Mermaid diagrams,
 orchestrator engine selection, Claude (with a stubbed `anthropic` module so
 no network is needed), and the full HTTP flow including ownership isolation.
+
+## Environment variables
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `DJANGO_SECRET_KEY` | dev-only insecure key | **Set in production.** Used for sessions, CSRF, password reset tokens. |
+| `DJANGO_DEBUG` | `true` | Set to `false` in production. |
+| `DJANGO_ALLOWED_HOSTS` | `*` when DEBUG, empty otherwise | Comma-separated list of allowed hostnames. |
+| `DJANGO_CSRF_TRUSTED_ORIGINS` | empty | Comma-separated origins (`https://devplanner.example.com`). |
+| `DJANGO_SQLITE_PATH` | `db.sqlite3` | Where to store SQLite when no `DATABASE_URL` is set. |
+| `DATABASE_URL` | empty | If set, used instead of SQLite (e.g. `postgres://user:pass@host:5432/db`). |
+| `DJANGO_HSTS_SECONDS` | `0` | Enable HSTS in production by setting this to e.g. `31536000`. |
+| `DJANGO_SECURE_COOKIES` | `true` when DEBUG=false | Set to `false` if you are not yet on HTTPS. |
+| `ANTHROPIC_API_KEY` | empty | Global Claude key (per-user keys configured in Settings always win). |
+| `ANTHROPIC_MODEL` | `claude-opus-4-5` | Override Claude model. |
+| `ANTHROPIC_MAX_TOKENS` | `4000` | Max tokens per Claude response. |
 
 ## License
 
