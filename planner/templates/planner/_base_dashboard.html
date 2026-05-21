@@ -1,4 +1,5 @@
 {% extends "planner/base.html" %}
+{% load planner_extras %}
 
 {% block body %}
 <div class="min-h-full flex">
@@ -14,7 +15,7 @@
         <svg class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor"><path d="M3 4a1 1 0 011-1h5a1 1 0 011 1v5a1 1 0 01-1 1H4a1 1 0 01-1-1V4zM11 4a1 1 0 011-1h5a1 1 0 011 1v3a1 1 0 01-1 1h-5a1 1 0 01-1-1V4zM3 13a1 1 0 011-1h5a1 1 0 011 1v3a1 1 0 01-1 1H4a1 1 0 01-1-1v-3zM11 11a1 1 0 011-1h5a1 1 0 011 1v5a1 1 0 01-1 1h-5a1 1 0 01-1-1v-5z"/></svg>
         Dashboard
       </a>
-      <a href="{% url 'planner:project_new' %}" class="flex items-center gap-3 rounded-md px-3 py-2 {% if request.resolver_match.url_name == 'project_new' %}bg-indigo-600/20 text-indigo-300{% else %}text-slate-300 hover:bg-slate-800{% endif %}">
+      <a href="{% url 'planner:project_new_chat' %}" class="flex items-center gap-3 rounded-md px-3 py-2 {% if request.resolver_match.url_name == 'project_new_chat' or request.resolver_match.url_name == 'project_new' %}bg-indigo-600/20 text-indigo-300{% else %}text-slate-300 hover:bg-slate-800{% endif %}">
         <svg class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor"><path d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z"/></svg>
         New project
       </a>
@@ -26,7 +27,7 @@
       <div class="pt-4">
         <p class="px-3 text-xs font-semibold uppercase tracking-wider text-slate-500">Projects</p>
         <div class="mt-1 space-y-1 max-h-72 overflow-y-auto pr-1">
-          {% for p in request.user.projects.all %}
+          {% for p in request.user|active_projects %}
             <a href="{% url 'planner:project_detail' p.pk %}" class="block truncate rounded-md px-3 py-1.5 text-slate-300 hover:bg-slate-800 {% if request.resolver_match.kwargs.pk == p.pk|stringformat:'i' %}bg-slate-800 text-white{% endif %}">
               {{ p.name }}
             </a>

@@ -107,6 +107,10 @@ class Project(models.Model):
     budget = models.CharField(max_length=120, blank=True)
     risks = models.TextField(blank=True)
 
+    # A project created from a chat that hasn't been finalised yet. Drafts
+    # are hidden from the dashboard until their documents are generated.
+    is_draft = models.BooleanField(default=False)
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -186,3 +190,31 @@ class Document(models.Model):
     @property
     def is_diagram(self) -> bool:
         return self.kind in self.DIAGRAM_KINDS
+
+
+class ChatMessage(models.Model):
+    """One turn of the project-intake chat, persisted so the conversation
+    survives reloads and can be resumed.
+
+    Stored against the (draft) :class:`Project` the chat is building.
+    """
+
+    ROLE_USER = "user"
+    ROLE_ASSISTANT = "assistant"
+    ROLE_CHOICES = [
+        (ROLE_USER, "User"),
+        (ROLE_ASSISTANT, "Assistant"),
+    ]
+
+    project = models.ForeignKey(
+        Project, on_delete=models.CASCADE, related_name="chat_messages",
+    )
+    role = models.CharField(max_length=16, choices=ROLE_CHOICES)
+    content = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["created_at", "id"]
+
+    def __str__(self) -> str:
+        return f"{self.role}: {self.content[:40]}"
