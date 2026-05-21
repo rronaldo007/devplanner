@@ -709,6 +709,96 @@ class ProjectAssistantTests(TestCase):
         self._apply(body["message_id"], "apply")
         self.assertEqual(self._apply(body["message_id"], "apply").status_code, 409)
 
+    # --- Diagrams are a deterministic projection of fields ------------------
+    def test_field_change_regenerates_affected_diagrams(self):
+        sync_default_documents(self.project)
+        text = self._proposal_text(
+            "Adding a feature.",
+            [{"type": "field", "field": "features",
+              "value": ["Create board", "Burndown chart"], "note": "added chart"}],
+        )
+        _install_anthropic_stub(text)
+        body = self._send("add burndown chart").json()
+        applied = self._apply(body["message_id"], "apply").json()
+        self.assertEqual(applied["status"], "applied")
+
+        self.project.refresh_from_db()
+        uc = self.project.documents.get(kind=Document.KIND_USE_CASE_DIAGRAM)
+        fl = self.project.documents.get(kind=Document.KIND_FLOW_DIAGRAM)
+        # features feeds both use case and flow — both rebuilt deterministically.
+        self.assertEqual(uc.body, diagrams.use_case(self.project))
+        self.assertEqual(fl.body, diagrams.flow(self.project))
+        self.assertIn("Burndown chart", uc.body)
+        self.assertTrue(uc.is_generated)
+        self.assertTrue(any("Regenerated diagram" in line for line in applied["applied"]))
+
+    def test_entities_change_regenerates_only_erd(self):
+        sync_default_documents(self.project)
+        uc_before = self.project.documents.get(kind=Document.KIND_USE_CASE_DIAGRAM).body
+        fl_before = self.project.documents.get(kind=Document.KIND_FLOW_DIAGRAM).body
+        text = self._proposal_text(
+            "Adding an entity.",
+            [{"type": "field", "field": "entities",
+              "value": [{"name": "User", "fields": ["email"]},
+                        {"name": "Invoice", "fields": ["amount", "user"]}],
+              "note": "added invoice"}],
+        )
+        _install_anthropic_stub(text)
+        body = self._send("add invoice entity").json()
+        self._apply(body["message_id"], "apply")
+
+        self.project.refresh_from_db()
+        erd = self.project.documents.get(kind=Document.KIND_ERD_DIAGRAM)
+        self.assertEqual(erd.body, diagrams.erd(self.project))
+        self.assertIn("Invoice", erd.body)
+        # use case / flow do not depend on entities — left untouched.
+        self.assertEqual(
+            self.project.documents.get(kind=Document.KIND_USE_CASE_DIAGRAM).body, uc_before
+        )
+        self.assertEqual(
+            self.project.documents.get(kind=Document.KIND_FLOW_DIAGRAM).body, fl_before
+        )
+
+    def test_handwritten_diagram_body_is_rejected(self):
+        sync_default_documents(self.project)
+        erd = self.project.documents.get(kind=Document.KIND_ERD_DIAGRAM)
+        text = self._proposal_text(
+            "Rewriting the ERD.",
+            [{"type": "document", "document_id": erd.pk, "kind": "erd_diagram",
+              "body": "erDiagram\n  GARBAGE", "note": "hack"}],
+        )
+        _install_anthropic_stub(text)
+        body = self._send("rewrite erd").json()
+        applied = self._apply(body["message_id"], "apply").json()
+
+        erd.refresh_from_db()
+        self.project.refresh_from_db()
+        self.assertNotIn("GARBAGE", erd.body)
+        self.assertEqual(erd.body, diagrams.erd(self.project))
+        self.assertTrue(erd.is_generated)
+        self.assertTrue(
+            any("Regenerated diagram" in line for line in applied["applied"])
+        )
+
+    def test_non_diagram_field_change_leaves_diagrams_untouched(self):
+        sync_default_documents(self.project)
+        erd_before = self.project.documents.get(kind=Document.KIND_ERD_DIAGRAM).body
+        text = self._proposal_text(
+            "Updating stack.",
+            [{"type": "field", "field": "stack", "value": "Go + Postgres"}],
+        )
+        _install_anthropic_stub(text)
+        body = self._send("use go").json()
+        applied = self._apply(body["message_id"], "apply").json()
+
+        self.project.refresh_from_db()
+        self.assertEqual(
+            self.project.documents.get(kind=Document.KIND_ERD_DIAGRAM).body, erd_before
+        )
+        self.assertFalse(
+            any("Regenerated diagram" in line for line in applied["applied"])
+        )
+
 
 class ChatAssistantContinuationTests(TestCase):
     """assistant_turn auto-continues a truncated (max_tokens) response."""
