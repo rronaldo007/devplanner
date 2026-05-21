@@ -32,10 +32,10 @@ PROPOSAL_MARKER = "===PROPOSAL==="
 
 # The assistant may rewrite several whole document bodies in one turn, so it
 # needs far more room than the intake chat's short turns. The response is
-# streamed (see assistant_turn), so a large budget is safe — opus-4-7 supports
-# up to 128k output tokens. (We no longer prefill-continue truncated turns:
-# opus-4-7 rejects assistant-message prefill.)
-ASSISTANT_MAX_TOKENS = int(os.environ.get("ANTHROPIC_ASSISTANT_MAX_TOKENS", "64000"))
+# streamed (see assistant_turn), so we use opus-4-7's maximum output budget
+# (128k — its hard ceiling, effectively "unlimited" output). No prefill
+# continuation: opus-4-7 rejects assistant-message prefill.
+ASSISTANT_MAX_TOKENS = int(os.environ.get("ANTHROPIC_ASSISTANT_MAX_TOKENS", "128000"))
 
 # Anthropic's server-side web search tool. When enabled, Claude can look facts
 # up online (competitors, market data, common stacks) while interviewing the
