@@ -6,7 +6,7 @@ from django import forms
 from django.contrib.auth import get_user_model
 from django.contrib.auth.forms import UserCreationForm
 
-from .models import Document, Project, UserProfile
+from .models import Document, Note, Project, UserProfile
 
 
 User = get_user_model()
@@ -192,6 +192,30 @@ class DocumentEditForm(forms.ModelForm):
         widgets = {
             "body": forms.Textarea(attrs={"rows": 20, "class": "font-mono"}),
         }
+
+
+# ===========================================================================
+# Notes
+# ===========================================================================
+class NoteForm(forms.ModelForm):
+    """Create / edit a plain-text project note."""
+
+    class Meta:
+        model = Note
+        fields = ("title", "body")
+        widgets = {
+            "title": forms.TextInput(attrs={"placeholder": "Optional title"}),
+            "body": forms.Textarea(attrs={
+                "rows": 6,
+                "placeholder": "Write a note…",
+            }),
+        }
+
+    def clean(self):
+        cleaned = super().clean()
+        if not (cleaned.get("title") or "").strip() and not (cleaned.get("body") or "").strip():
+            raise forms.ValidationError("A note needs a title or some content.")
+        return cleaned
 
 
 # ===========================================================================

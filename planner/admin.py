@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import Document, Project, UserProfile
+from .models import Document, Note, Project, UserProfile
 
 
 @admin.register(UserProfile)
@@ -25,3 +25,10 @@ class DocumentAdmin(admin.ModelAdmin):
     list_display = ("title", "project", "kind", "is_generated", "updated_at")
     list_filter = ("kind", "is_generated")
     search_fields = ("title", "project__name")
+
+
+@admin.register(Note)
+class NoteAdmin(admin.ModelAdmin):
+    list_display = ("display_title", "project", "updated_at")
+    search_fields = ("title", "body", "project__name")
+    list_select_related = ("project",)

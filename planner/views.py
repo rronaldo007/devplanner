@@ -28,9 +28,9 @@ from . import generators
 from .generators import chat
 from .forms import (
     CustomDocumentForm, DocumentEditForm, InterviewForm,
-    RegisterForm, UserProfileForm,
+    NoteForm, RegisterForm, UserProfileForm,
 )
-from .models import ChatMessage, Document, Project
+from .models import ChatMessage, Document, Note, Project
 
 
 # ===========================================================================
@@ -576,6 +576,58 @@ def document_drawio(request, pk, doc_pk):
     filename = f"{project.pk}_{document.kind}_{document.pk}.drawio"
     response["Content-Disposition"] = f'attachment; filename="{filename}"'
     return response
+
+
+# ===========================================================================
+# Notes
+# ===========================================================================
+@login_required
+def project_notes(request, pk):
+    project = _owned_project(request, pk)
+    if request.method == "POST":
+        form = NoteForm(request.POST)
+        if form.is_valid():
+            note = form.save(commit=False)
+            note.project = project
+            note.save()
+            messages.success(request, "Note added.")
+            return HttpResponseRedirect(reverse("planner:project_notes", args=[project.pk]))
+    else:
+        form = NoteForm()
+    return render(
+        request,
+        "planner/dashboard/notes.html",
+        {"project": project, "form": form, "notes": project.notes.all()},
+    )
+
+
+@login_required
+def note_edit(request, pk, note_pk):
+    project = _owned_project(request, pk)
+    note = get_object_or_404(Note, pk=note_pk, project=project)
+    if request.method == "POST":
+        form = NoteForm(request.POST, instance=note)
+        if form.is_valid():
+            form.save()
+            messages.success(request, "Note updated.")
+            return HttpResponseRedirect(reverse("planner:project_notes", args=[project.pk]))
+    else:
+        form = NoteForm(instance=note)
+    return render(
+        request,
+        "planner/dashboard/note_edit.html",
+        {"project": project, "form": form, "note": note},
+    )
+
+
+@require_http_methods(["POST"])
+@login_required
+def note_delete(request, pk, note_pk):
+    project = _owned_project(request, pk)
+    note = get_object_or_404(Note, pk=note_pk, project=project)
+    note.delete()
+    messages.success(request, "Note deleted.")
+    return HttpResponseRedirect(reverse("planner:project_notes", args=[project.pk]))
 
 
 # ===========================================================================

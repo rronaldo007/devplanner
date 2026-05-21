@@ -27,7 +27,7 @@ from .generators import (
     generate_all, generate_custom, sync_default_documents,
 )
 from .generators.engine import _api_key_for, _select_engine
-from .models import ChatMessage, Document, Project, UserProfile
+from .models import ChatMessage, Document, Note, Project, UserProfile
 
 
 User = get_user_model()
@@ -1252,3 +1252,83 @@ class ChatViewTests(TestCase):
         # Visiting the finished-folder URL of a draft resumes the chat.
         detail = self.client.get(reverse("planner:project_detail", args=[project.pk]))
         self.assertRedirects(detail, reverse("planner:project_chat", args=[project.pk]))
+
+
+# ===========================================================================
+# Notes
+# ===========================================================================
+class NotesTests(TestCase):
+    def setUp(self):
+        self.user = _make_user()
+        self.other = _make_user(username="mallory")
+        self.project = _make_project(self.user)
+        self.client.force_login(self.user)
+
+    def test_notes_page_loads(self):
+        resp = self.client.get(reverse("planner:project_notes", args=[self.project.pk]))
+        self.assertEqual(resp.status_code, 200)
+
+    def test_create_note(self):
+        resp = self.client.post(
+            reverse("planner:project_notes", args=[self.project.pk]),
+            data={"title": "Idea", "body": "Use websockets"},
+        )
+        self.assertRedirects(resp, reverse("planner:project_notes", args=[self.project.pk]))
+        note = self.project.notes.get()
+        self.assertEqual(note.title, "Idea")
+        self.assertEqual(note.body, "Use websockets")
+
+    def test_empty_note_rejected(self):
+        resp = self.client.post(
+            reverse("planner:project_notes", args=[self.project.pk]),
+            data={"title": "", "body": "   "},
+        )
+        self.assertEqual(resp.status_code, 200)  # re-rendered with errors
+        self.assertEqual(self.project.notes.count(), 0)
+
+    def test_edit_note(self):
+        note = Note.objects.create(project=self.project, title="A", body="x")
+        resp = self.client.post(
+            reverse("planner:note_edit", args=[self.project.pk, note.pk]),
+            data={"title": "B", "body": "y"},
+        )
+        self.assertRedirects(resp, reverse("planner:project_notes", args=[self.project.pk]))
+        note.refresh_from_db()
+        self.assertEqual(note.title, "B")
+        self.assertEqual(note.body, "y")
+
+    def test_delete_note(self):
+        note = Note.objects.create(project=self.project, body="bye")
+        resp = self.client.post(reverse("planner:note_delete", args=[self.project.pk, note.pk]))
+        self.assertRedirects(resp, reverse("planner:project_notes", args=[self.project.pk]))
+        self.assertFalse(Note.objects.filter(pk=note.pk).exists())
+
+    def test_notes_scoped_to_owner(self):
+        note = Note.objects.create(project=self.project, body="secret")
+        self.client.force_login(self.other)
+        # Cannot view another user's project notes...
+        self.assertEqual(
+            self.client.get(reverse("planner:project_notes", args=[self.project.pk])).status_code,
+            404,
+        )
+        # ...nor edit/delete a specific note.
+        self.assertEqual(
+            self.client.post(
+                reverse("planner:note_edit", args=[self.project.pk, note.pk]),
+                data={"title": "hax", "body": "z"},
+            ).status_code,
+            404,
+        )
+        self.assertEqual(
+            self.client.post(
+                reverse("planner:note_delete", args=[self.project.pk, note.pk])
+            ).status_code,
+            404,
+        )
+        self.assertTrue(Note.objects.filter(pk=note.pk).exists())
+
+    def test_note_deleted_with_project(self):
+        Note.objects.create(project=self.project, body="x")
+        pk = self.project.pk
+        self.project.delete()
+        self.assertFalse(Note.objects.filter(project_id=pk).exists())
