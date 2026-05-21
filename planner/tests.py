@@ -357,6 +357,22 @@ def _install_anthropic_stub(response_text: str):
     class _Response:
         def __init__(self, text):
             self.content = [_Block(text)]
+            self.stop_reason = "end_turn"
+
+    class _Stream:
+        """Context manager mimicking client.messages.stream()."""
+
+        def __init__(self, response):
+            self._response = response
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def get_final_message(self):
+            return self._response
 
     class _Messages:
         def __init__(self, outer):
@@ -366,6 +382,10 @@ def _install_anthropic_stub(response_text: str):
         def create(self, **kwargs):
             self.calls.append(kwargs)
             return _Response(self.outer._response_text)
+
+        def stream(self, **kwargs):
+            self.calls.append(kwargs)
+            return _Stream(_Response(self.outer._response_text))
 
     class _Anthropic:
         def __init__(self, *args, api_key=None, **kwargs):
@@ -800,8 +820,13 @@ class ProjectAssistantTests(TestCase):
         )
 
 
-class ChatAssistantContinuationTests(TestCase):
-    """assistant_turn auto-continues a truncated (max_tokens) response."""
+class ChatAssistantStreamingTests(TestCase):
+    """assistant_turn streams a single response (no assistant-message prefill).
+
+    opus-4-7 rejects assistant-message prefill, so the assistant must produce
+    the whole proposal in one streamed response and never end the conversation
+    on an assistant turn.
+    """
 
     def setUp(self):
         self._orig = sys.modules.get("anthropic")
@@ -812,8 +837,8 @@ class ChatAssistantContinuationTests(TestCase):
         else:
             sys.modules["anthropic"] = self._orig
 
-    def _install(self, chunks):
-        """chunks: list of (text, stop_reason) returned in sequence."""
+    def _install(self, text, stop_reason="end_turn"):
+        calls = []
 
         class _Block:
             def __init__(self, t):
@@ -824,14 +849,27 @@ class ChatAssistantContinuationTests(TestCase):
                 self.content = [_Block(t)]
                 self.stop_reason = sr
 
-        class _Messages:
-            def __init__(self):
-                self.i = 0
+        class _Stream:
+            def __init__(self, resp):
+                self._resp = resp
 
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def get_final_message(self):
+                return self._resp
+
+        class _Messages:
             def create(self, **kwargs):
-                t, sr = chunks[min(self.i, len(chunks) - 1)]
-                self.i += 1
-                return _Resp(t, sr)
+                calls.append(kwargs)
+                return _Resp(text, stop_reason)
+
+            def stream(self, **kwargs):
+                calls.append(kwargs)
+                return _Stream(_Resp(text, stop_reason))
 
         class _Anthropic:
             def __init__(self, *a, **k):
@@ -840,27 +878,55 @@ class ChatAssistantContinuationTests(TestCase):
         module = types.ModuleType("anthropic")
         module.Anthropic = _Anthropic
         sys.modules["anthropic"] = module
+        self.calls = calls
 
-    def test_continues_until_proposal_complete(self):
-        part1 = (
+    def test_single_streamed_response_parses_proposal(self):
+        text = (
             "Working on it.\n" + chat_mod.PROPOSAL_MARKER
-            + '\n{"summary":"s","changes":[{"type":"field","field":"stack","val'
+            + '\n{"summary":"s","changes":[{"type":"field","field":"stack",'
+            '"value":"Django 6"}]}'
         )
-        part2 = 'ue":"Django 6"}]}'
-        self._install([(part1, "max_tokens"), (part2, "end_turn")])
+        self._install(text)
         res = chat_mod.assistant_turn(
             [{"role": "user", "content": "go"}], "ctx", api_key="x"
         )
         self.assertEqual(res["proposals"][0]["value"], "Django 6")
         self.assertEqual(res["reply"], "Working on it.")
 
-    def test_truncation_note_when_never_completes(self):
-        self._install([("partial, no marker", "max_tokens")])
+    def test_truncation_note_when_max_tokens(self):
+        self._install("partial, no marker", "max_tokens")
         res = chat_mod.assistant_turn(
             [{"role": "user", "content": "go"}], "ctx", api_key="x", language="en"
         )
         self.assertEqual(res["proposals"], [])
         self.assertIn("too long", res["reply"])
+
+    def test_conversation_never_ends_on_assistant_message(self):
+        # The regression guard: opus-4-7 400s if the messages end with an
+        # assistant turn (prefill). Even with prior assistant turns in history,
+        # the request must end on the user's message.
+        self._install("ok")
+        chat_mod.assistant_turn(
+            [
+                {"role": "user", "content": "hi"},
+                {"role": "assistant", "content": "earlier reply"},
+                {"role": "user", "content": "go"},
+            ],
+            "ctx",
+            api_key="x",
+        )
+        sent = self.calls[-1]["messages"]
+        self.assertEqual(sent[-1]["role"], "user")
+
+    def test_system_context_is_cached(self):
+        # The large system+context block carries a cache_control breakpoint.
+        self._install("ok")
+        chat_mod.assistant_turn(
+            [{"role": "user", "content": "go"}], "project context", api_key="x"
+        )
+        system = self.calls[-1]["system"]
+        self.assertEqual(system[0]["cache_control"], {"type": "ephemeral"})
+        self.assertIn("project context", system[0]["text"])
 
 
 class DefaultTitlesTests(TestCase):
