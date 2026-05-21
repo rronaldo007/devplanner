@@ -501,6 +501,194 @@ class DashboardFlowTests(TestCase):
 # ===========================================================================
 # Default titles
 # ===========================================================================
+class ProjectAssistantTests(TestCase):
+    def setUp(self):
+        self.user = _make_user(api_key="user-sk-test")
+        self.project = _make_project(self.user)  # not a draft
+        self.client.force_login(self.user)
+        self._orig = sys.modules.get("anthropic")
+
+    def tearDown(self):
+        if self._orig is None:
+            sys.modules.pop("anthropic", None)
+        else:
+            sys.modules["anthropic"] = self._orig
+
+    def _proposal_text(self, reply, changes, summary="ok"):
+        return (
+            reply + "\n" + chat_mod.PROPOSAL_MARKER + "\n"
+            + json.dumps({"summary": summary, "changes": changes})
+        )
+
+    def _send(self, message):
+        return self.client.post(
+            reverse("planner:project_assistant_message", args=[self.project.pk]),
+            data=json.dumps({"message": message}),
+            content_type="application/json",
+        )
+
+    def _apply(self, message_id, action):
+        return self.client.post(
+            reverse("planner:project_assistant_apply", args=[self.project.pk]),
+            data=json.dumps({"message_id": message_id, "action": action}),
+            content_type="application/json",
+        )
+
+    def test_page_seeds_opening_message(self):
+        _install_anthropic_stub("x")
+        resp = self.client.get(reverse("planner:project_assistant", args=[self.project.pk]))
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(
+            self.project.chat_messages.filter(phase=ChatMessage.PHASE_ASSISTANT).count(), 1
+        )
+
+    def test_draft_redirects_to_intake_chat(self):
+        _install_anthropic_stub("x")
+        draft = _make_project(self.user, name="Draft", is_draft=True)
+        resp = self.client.get(reverse("planner:project_assistant", args=[draft.pk]))
+        self.assertRedirects(resp, reverse("planner:project_chat", args=[draft.pk]))
+
+    def test_without_key_redirects_to_detail(self):
+        nokey = _make_user(username="nokey", api_key="")
+        project = _make_project(nokey)
+        self.client.force_login(nokey)
+        _install_anthropic_stub("x")  # installed, but user has no key
+        resp = self.client.get(reverse("planner:project_assistant", args=[project.pk]))
+        self.assertRedirects(resp, reverse("planner:project_detail", args=[project.pk]))
+
+    def test_plain_reply_has_no_proposal(self):
+        _install_anthropic_stub("Your stack looks solid.")
+        resp = self._send("is my stack ok?")
+        self.assertEqual(resp.status_code, 200)
+        self.assertFalse(resp.json()["has_proposal"])
+
+    def test_field_proposal_apply_updates_project(self):
+        text = self._proposal_text(
+            "I'll update the stack.",
+            [{"type": "field", "field": "stack", "value": "Django 6 + HTMX", "note": "modernised"}],
+        )
+        _install_anthropic_stub(text)
+        resp = self._send("use htmx")
+        body = resp.json()
+        self.assertTrue(body["has_proposal"])
+        self.assertEqual(self._apply(body["message_id"], "apply").json()["status"], "applied")
+        self.project.refresh_from_db()
+        self.assertEqual(self.project.stack, "Django 6 + HTMX")
+
+    def test_document_proposal_updates_existing_document(self):
+        doc = Document.objects.create(
+            project=self.project, kind=Document.KIND_USER_STORIES,
+            title="User Stories", body="old", is_generated=True,
+        )
+        text = self._proposal_text(
+            "Finishing the user stories.",
+            [{"type": "document", "document_id": doc.pk, "title": "User Stories",
+              "body": "# User Stories\n\nUS-1 ...", "note": "completed"}],
+        )
+        _install_anthropic_stub(text)
+        body = self._send("finish the user stories").json()
+        self._apply(body["message_id"], "apply")
+        doc.refresh_from_db()
+        self.assertIn("US-1", doc.body)
+        self.assertFalse(doc.is_generated)
+
+    def test_document_proposal_creates_new_custom_doc(self):
+        text = self._proposal_text(
+            "Adding an architecture doc.",
+            [{"type": "document", "kind": "custom", "title": "Architecture",
+              "body": "# Architecture\n\n...", "note": "new"}],
+        )
+        _install_anthropic_stub(text)
+        body = self._send("add an architecture doc").json()
+        self._apply(body["message_id"], "apply")
+        self.assertTrue(
+            self.project.documents.filter(kind=Document.KIND_CUSTOM, title="Architecture").exists()
+        )
+
+    def test_discard_makes_no_changes(self):
+        text = self._proposal_text(
+            "I'll change the stack.",
+            [{"type": "field", "field": "stack", "value": "SHOULD NOT APPLY"}],
+        )
+        _install_anthropic_stub(text)
+        body = self._send("change stack").json()
+        self.assertEqual(self._apply(body["message_id"], "discard").json()["status"], "discarded")
+        self.project.refresh_from_db()
+        self.assertNotEqual(self.project.stack, "SHOULD NOT APPLY")
+
+    def test_cannot_apply_twice(self):
+        text = self._proposal_text(
+            "ok", [{"type": "field", "field": "budget", "value": "10k"}]
+        )
+        _install_anthropic_stub(text)
+        body = self._send("set budget").json()
+        self._apply(body["message_id"], "apply")
+        self.assertEqual(self._apply(body["message_id"], "apply").status_code, 409)
+
+
+class ChatAssistantContinuationTests(TestCase):
+    """assistant_turn auto-continues a truncated (max_tokens) response."""
+
+    def setUp(self):
+        self._orig = sys.modules.get("anthropic")
+
+    def tearDown(self):
+        if self._orig is None:
+            sys.modules.pop("anthropic", None)
+        else:
+            sys.modules["anthropic"] = self._orig
+
+    def _install(self, chunks):
+        """chunks: list of (text, stop_reason) returned in sequence."""
+
+        class _Block:
+            def __init__(self, t):
+                self.text = t
+
+        class _Resp:
+            def __init__(self, t, sr):
+                self.content = [_Block(t)]
+                self.stop_reason = sr
+
+        class _Messages:
+            def __init__(self):
+                self.i = 0
+
+            def create(self, **kwargs):
+                t, sr = chunks[min(self.i, len(chunks) - 1)]
+                self.i += 1
+                return _Resp(t, sr)
+
+        class _Anthropic:
+            def __init__(self, *a, **k):
+                self.messages = _Messages()
+
+        module = types.ModuleType("anthropic")
+        module.Anthropic = _Anthropic
+        sys.modules["anthropic"] = module
+
+    def test_continues_until_proposal_complete(self):
+        part1 = (
+            "Working on it.\n" + chat_mod.PROPOSAL_MARKER
+            + '\n{"summary":"s","changes":[{"type":"field","field":"stack","val'
+        )
+        part2 = 'ue":"Django 6"}]}'
+        self._install([(part1, "max_tokens"), (part2, "end_turn")])
+        res = chat_mod.assistant_turn(
+            [{"role": "user", "content": "go"}], "ctx", api_key="x"
+        )
+        self.assertEqual(res["proposals"][0]["value"], "Django 6")
+        self.assertEqual(res["reply"], "Working on it.")
+
+    def test_truncation_note_when_never_completes(self):
+        self._install([("partial, no marker", "max_tokens")])
+        res = chat_mod.assistant_turn(
+            [{"role": "user", "content": "go"}], "ctx", api_key="x", language="en"
+        )
+        self.assertEqual(res["proposals"], [])
+        self.assertIn("too long", res["reply"])
+
+
 class DefaultTitlesTests(TestCase):
     def test_default_titles_cover_all_kinds(self):
         for kind in Document.DEFAULT_KINDS:
@@ -574,6 +762,25 @@ class ChatBriefParsingTests(TestCase):
         long = chat_mod.derive_title("x" * 90)
         self.assertTrue(long.endswith("…"))
         self.assertLessEqual(len(long), 61)
+
+    def test_parse_proposal(self):
+        changes = [{"type": "field", "field": "stack", "value": "Django"}]
+        text = "Sure.\n" + chat_mod.PROPOSAL_MARKER + "\n" + json.dumps(
+            {"summary": "s", "changes": changes}
+        )
+        parsed, summary = chat_mod._parse_proposal(text)
+        self.assertEqual(summary, "s")
+        self.assertEqual(parsed[0]["field"], "stack")
+
+    def test_parse_proposal_none_without_marker(self):
+        parsed, summary = chat_mod._parse_proposal("just a reply")
+        self.assertIsNone(parsed)
+
+    def test_coerce_field(self):
+        self.assertEqual(chat_mod.coerce_field("stack", "  Django  "), (True, "Django"))
+        self.assertEqual(chat_mod.coerce_field("features", "a\nb"), (True, ["a", "b"]))
+        ok, _ = chat_mod.coerce_field("not_a_field", "x")
+        self.assertFalse(ok)
 
 
 class ChatWebSearchTests(TestCase):

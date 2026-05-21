@@ -156,7 +156,12 @@ def project_chat(request, pk):
     return render(
         request,
         "planner/dashboard/chat.html",
-        {"project": project, "chat_messages": project.chat_messages.all()},
+        {
+            "project": project,
+            "chat_messages": project.chat_messages.filter(
+                phase=ChatMessage.PHASE_INTAKE
+            ),
+        },
     )
 
 
@@ -213,7 +218,7 @@ def project_chat_message(request, pk):
         project.save(update_fields=["name"])
     history = [
         {"role": m.role, "content": m.content}
-        for m in project.chat_messages.all()
+        for m in project.chat_messages.filter(phase=ChatMessage.PHASE_INTAKE)
     ]
 
     language = project.language
@@ -252,6 +257,134 @@ def project_chat_message(request, pk):
         "done": True,
         "redirect_url": reverse("planner:project_detail", args=[project.pk]),
     })
+
+
+# ===========================================================================
+# Project assistant (post-creation chat that edits info + documents)
+# ===========================================================================
+@login_required
+def project_assistant(request, pk):
+    """Chat with an assistant that knows the whole project and its documents."""
+
+    project = _owned_project(request, pk)
+    if project.is_draft:
+        return HttpResponseRedirect(reverse("planner:project_chat", args=[project.pk]))
+    if not chat.is_available(request.user):
+        messages.info(
+            request,
+            "The project assistant needs an Anthropic API key — add one in Settings.",
+        )
+        return HttpResponseRedirect(reverse("planner:project_detail", args=[project.pk]))
+
+    msgs = project.chat_messages.filter(phase=ChatMessage.PHASE_ASSISTANT)
+    if not msgs.exists():
+        ChatMessage.objects.create(
+            project=project,
+            phase=ChatMessage.PHASE_ASSISTANT,
+            role=ChatMessage.ROLE_ASSISTANT,
+            content=chat.assistant_opening_message(project.language),
+        )
+    return render(
+        request,
+        "planner/dashboard/assistant.html",
+        {
+            "project": project,
+            "chat_messages": project.chat_messages.filter(
+                phase=ChatMessage.PHASE_ASSISTANT
+            ),
+        },
+    )
+
+
+@require_http_methods(["POST"])
+@login_required
+def project_assistant_message(request, pk):
+    """One project-assistant turn (JSON in, JSON out).
+
+    The reply may carry ``proposals`` — pending changes the user confirms via
+    :func:`project_assistant_apply`.
+    """
+
+    project = _owned_project(request, pk)
+    if project.is_draft:
+        return JsonResponse({"error": "draft"}, status=409)
+    if not chat.is_available(request.user):
+        return JsonResponse({"error": "chat_unavailable"}, status=409)
+
+    try:
+        payload = json.loads(request.body or "{}")
+        message = (payload.get("message") or "").strip()
+    except (ValueError, TypeError):
+        return JsonResponse({"error": "bad_request"}, status=400)
+    if not message:
+        return JsonResponse({"error": "empty_message"}, status=400)
+
+    ChatMessage.objects.create(
+        project=project, phase=ChatMessage.PHASE_ASSISTANT,
+        role=ChatMessage.ROLE_USER, content=message,
+    )
+    history = [
+        {"role": m.role, "content": m.content}
+        for m in project.chat_messages.filter(phase=ChatMessage.PHASE_ASSISTANT)
+    ]
+    context = chat.build_project_context(project)
+    try:
+        result = chat.assistant_turn(
+            history, context,
+            api_key=chat.api_key_for_user(request.user),
+            language=project.language,
+        )
+    except Exception as exc:  # pragma: no cover - network/runtime safety net
+        return JsonResponse({"error": "claude_failed", "detail": str(exc)}, status=502)
+
+    proposals = result["proposals"]
+    msg = ChatMessage.objects.create(
+        project=project, phase=ChatMessage.PHASE_ASSISTANT,
+        role=ChatMessage.ROLE_ASSISTANT, content=result["reply"],
+        proposals=proposals,
+        proposal_status=(
+            ChatMessage.PROPOSAL_PENDING if proposals else ChatMessage.PROPOSAL_NONE
+        ),
+    )
+    return JsonResponse({
+        "reply": result["reply"],
+        "message_id": msg.pk,
+        "has_proposal": bool(proposals),
+        "proposals": _proposals_summary(proposals),
+    })
+
+
+@require_http_methods(["POST"])
+@login_required
+def project_assistant_apply(request, pk):
+    """Apply or discard the pending proposal on an assistant message."""
+
+    project = _owned_project(request, pk)
+    try:
+        payload = json.loads(request.body or "{}")
+        message_id = payload.get("message_id")
+        action = payload.get("action")
+    except (ValueError, TypeError):
+        return JsonResponse({"error": "bad_request"}, status=400)
+
+    msg = get_object_or_404(
+        ChatMessage, pk=message_id, project=project,
+        phase=ChatMessage.PHASE_ASSISTANT,
+    )
+    if msg.proposal_status != ChatMessage.PROPOSAL_PENDING:
+        return JsonResponse({"error": "not_pending"}, status=409)
+
+    if action == "discard":
+        msg.proposal_status = ChatMessage.PROPOSAL_DISCARDED
+        msg.save(update_fields=["proposal_status"])
+        return JsonResponse({"status": "discarded"})
+    if action != "apply":
+        return JsonResponse({"error": "bad_action"}, status=400)
+
+    applied = _apply_changes(project, msg.proposals)
+    msg.proposal_status = ChatMessage.PROPOSAL_APPLIED
+    msg.save(update_fields=["proposal_status"])
+    return JsonResponse({"status": "applied", "applied": applied})
 
 
 @login_required
@@ -450,3 +583,78 @@ def _owned_project(request, pk) -> Project:
     """Fetch a project ensuring the current user owns it (404 otherwise)."""
 
     return get_object_or_404(Project, pk=pk, owner=request.user)
+
+
+# --- Project assistant proposals -------------------------------------------
+_VALID_DOC_KINDS = dict(Document.KIND_CHOICES)
+
+
+def _proposals_summary(proposals: list) -> list[dict]:
+    """Short, display-friendly description of each proposed change."""
+
+    out = []
+    for change in proposals:
+        if change.get("type") == "document":
+            label = "Document · " + (change.get("title") or change.get("kind") or "document")
+        else:
+            label = "Field · " + str(change.get("field", "?"))
+        out.append({"label": label, "note": change.get("note", "")})
+    return out
+
+
+def _apply_changes(project: Project, proposals: list) -> list[str]:
+    """Apply each proposed change; return human-readable lines of what changed."""
+
+    applied = []
+    for change in proposals:
+        if change.get("type") == "document":
+            line = _apply_document_change(project, change)
+        elif change.get("type") == "field":
+            line = _apply_field_change(project, change)
+        else:
+            line = None
+        if line:
+            applied.append(line)
+    return applied
+
+
+def _apply_document_change(project: Project, change: dict) -> str | None:
+    body = change.get("body")
+    if not isinstance(body, str):
+        return None
+
+    doc = None
+    doc_id = change.get("document_id")
+    if doc_id:
+        doc = Document.objects.filter(pk=doc_id, project=project).first()
+
+    kind = change.get("kind")
+    if doc is None and kind in Document.DEFAULT_KINDS:
+        # Default kinds are unique per project — update in place if present.
+        doc = Document.objects.filter(project=project, kind=kind).first()
+
+    if doc is None:
+        doc = Document(
+            project=project,
+            kind=kind if kind in _VALID_DOC_KINDS else Document.KIND_CUSTOM,
+        )
+
+    title = (change.get("title") or "").strip()
+    if title:
+        doc.title = title
+    elif not doc.title:
+        doc.title = (kind or "Document").replace("_", " ").title()
+    doc.body = body
+    doc.is_generated = False  # assistant-edited; treat as hand-authored
+    doc.save()
+    return f"Updated document “{doc.title}”"
+
+
+def _apply_field_change(project: Project, change: dict) -> str | None:
+    field = change.get("field")
+    ok, value = chat.coerce_field(field, change.get("value"))
+    if not ok:
+        return None
+    setattr(project, field, value)
+    project.save()
+    return f"Updated field “{field}”"

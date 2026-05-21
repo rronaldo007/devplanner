@@ -43,6 +43,17 @@ urlpatterns = [
         views.project_chat_rename,
         name="project_chat_rename",
     ),
+    path("projects/<int:pk>/assistant/", views.project_assistant, name="project_assistant"),
+    path(
+        "projects/<int:pk>/assistant/message/",
+        views.project_assistant_message,
+        name="project_assistant_message",
+    ),
+    path(
+        "projects/<int:pk>/assistant/apply/",
+        views.project_assistant_apply,
+        name="project_assistant_apply",
+    ),
     path("projects/<int:pk>/edit/", views.project_edit, name="project_edit"),
     path("projects/<int:pk>/delete/", views.project_delete, name="project_delete"),
 
