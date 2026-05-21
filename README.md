@@ -66,6 +66,7 @@ Or do it manually:
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
+export DJANGO_DEBUG=1   # local dev; without this, set DJANGO_SECRET_KEY
 python manage.py migrate
 python manage.py runserver
 ```
@@ -152,9 +153,9 @@ HTTP flow including ownership isolation.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `DJANGO_SECRET_KEY` | dev-only insecure key | **Set in production.** Used for sessions, CSRF, password reset tokens. |
-| `DJANGO_DEBUG` | `true` | Set to `false` in production. |
-| `DJANGO_ALLOWED_HOSTS` | `*` when DEBUG, empty otherwise | Comma-separated list of allowed hostnames. |
+| `DJANGO_SECRET_KEY` | dev-only key (DEBUG only) | **Required when `DJANGO_DEBUG` is off** — startup raises if unset. Used for sessions, CSRF, password reset tokens. |
+| `DJANGO_DEBUG` | `false` | Set to `1`/`true` for local development. |
+| `DJANGO_ALLOWED_HOSTS` | loopback hosts when DEBUG, empty otherwise | Comma-separated list of allowed hostnames. Never defaults to `*`. |
 | `DJANGO_CSRF_TRUSTED_ORIGINS` | empty | Comma-separated origins (`https://devplanner.example.com`). |
 | `DJANGO_SQLITE_PATH` | `db.sqlite3` | Where to store SQLite when no `DATABASE_URL` is set. |
 | `DATABASE_URL` | empty | If set, used instead of SQLite (e.g. `postgres://user:pass@host:5432/db`). |
