@@ -30,7 +30,30 @@ urlpatterns = [
     path("dashboard/", views.dashboard, name="dashboard"),
     path("settings/", views.settings_view, name="settings"),
     path("projects/new/", views.project_new, name="project_new"),
+    path("projects/new/chat/", views.project_new_chat, name="project_new_chat"),
     path("projects/<int:pk>/", views.project_detail, name="project_detail"),
+    path("projects/<int:pk>/chat/", views.project_chat, name="project_chat"),
+    path(
+        "projects/<int:pk>/chat/message/",
+        views.project_chat_message,
+        name="project_chat_message",
+    ),
+    path(
+        "projects/<int:pk>/chat/rename/",
+        views.project_chat_rename,
+        name="project_chat_rename",
+    ),
+    path("projects/<int:pk>/assistant/", views.project_assistant, name="project_assistant"),
+    path(
+        "projects/<int:pk>/assistant/message/",
+        views.project_assistant_message,
+        name="project_assistant_message",
+    ),
+    path(
+        "projects/<int:pk>/assistant/apply/",
+        views.project_assistant_apply,
+        name="project_assistant_apply",
+    ),
     path("projects/<int:pk>/edit/", views.project_edit, name="project_edit"),
     path("projects/<int:pk>/delete/", views.project_delete, name="project_delete"),
 

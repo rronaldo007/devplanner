@@ -9,6 +9,8 @@
   </h1>
   {% if mode == "edit" %}
     <a href="{% url 'planner:project_detail' project.pk %}" class="text-sm text-slate-300 hover:text-white">← back to project</a>
+  {% else %}
+    <a href="{% url 'planner:project_new_chat' %}" class="text-sm text-indigo-300 hover:text-indigo-200">💬 Prefer a guided chat?</a>
   {% endif %}
 </div>
 <p class="mt-2 text-sm text-slate-400 max-w-2xl">

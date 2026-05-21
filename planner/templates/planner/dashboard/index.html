@@ -7,9 +7,14 @@
     <h1 class="text-2xl font-bold text-white">Dashboard</h1>
     <p class="text-sm text-slate-400 mt-1">Hi {{ user.username }}, here are your projects.</p>
   </div>
-  <a href="{% url 'planner:project_new' %}" class="inline-flex items-center rounded-md bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-500">
-    + New project
-  </a>
+  <div class="flex items-center gap-2">
+    <a href="{% url 'planner:project_new_chat' %}" class="inline-flex items-center gap-1.5 rounded-md bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-500">
+      💬 Start with chat
+    </a>
+    <a href="{% url 'planner:project_new' %}" class="inline-flex items-center rounded-md border border-slate-700 px-4 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-800">
+      Use the form
+    </a>
+  </div>
 </div>
 
 <div class="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-3">
@@ -28,6 +33,29 @@
     </div>
   </div>
 </div>
+
+{% if drafts %}
+<div class="mt-8">
+  <h2 class="text-sm font-semibold uppercase tracking-wide text-amber-300">Unfinished chats</h2>
+  <div class="mt-3 space-y-2">
+    {% for draft in drafts %}
+      <div class="flex items-center justify-between gap-3 rounded-lg border border-amber-700/40 bg-amber-900/10 px-4 py-3">
+        <div class="min-w-0">
+          <p class="truncate text-sm font-medium text-slate-100">{{ draft.name }}</p>
+          <p class="text-xs text-slate-500">started {{ draft.created_at|date:"M j, Y" }} · {{ draft.chat_messages.count }} message{{ draft.chat_messages.count|pluralize }}</p>
+        </div>
+        <div class="flex shrink-0 items-center gap-3">
+          <a href="{% url 'planner:project_chat' draft.pk %}" class="rounded-md bg-indigo-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-indigo-500">Resume</a>
+          <form action="{% url 'planner:project_delete' draft.pk %}" method="post" onsubmit="return confirm('Discard this draft?');">
+            {% csrf_token %}
+            <button type="submit" class="text-sm text-red-400 hover:text-red-300">Discard</button>
+          </form>
+        </div>
+      </div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
 
 <div class="mt-8">
   {% if projects %}
@@ -50,10 +78,15 @@
   {% else %}
     <div class="rounded-lg border border-dashed border-slate-700 px-6 py-12 text-center">
       <h3 class="text-lg font-semibold text-white">No projects yet</h3>
-      <p class="mt-2 text-sm text-slate-400">Start by creating your first project — it takes about 5 minutes.</p>
-      <a href="{% url 'planner:project_new' %}" class="mt-4 inline-flex items-center rounded-md bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-500">
-        Start a project
-      </a>
+      <p class="mt-2 text-sm text-slate-400">Start by creating your first project — chat it out or fill the form.</p>
+      <div class="mt-4 flex items-center justify-center gap-2">
+        <a href="{% url 'planner:project_new_chat' %}" class="inline-flex items-center gap-1.5 rounded-md bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-500">
+          💬 Start with chat
+        </a>
+        <a href="{% url 'planner:project_new' %}" class="inline-flex items-center rounded-md border border-slate-700 px-4 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-800">
+          Use the form
+        </a>
+      </div>
     </div>
   {% endif %}
 </div>

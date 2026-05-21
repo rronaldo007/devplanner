@@ -107,6 +107,10 @@ class Project(models.Model):
     budget = models.CharField(max_length=120, blank=True)
     risks = models.TextField(blank=True)
 
+    # A project created from a chat that hasn't been finalised yet. Drafts
+    # are hidden from the dashboard until their documents are generated.
+    is_draft = models.BooleanField(default=False)
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -186,3 +190,64 @@ class Document(models.Model):
     @property
     def is_diagram(self) -> bool:
         return self.kind in self.DIAGRAM_KINDS
+
+
+class ChatMessage(models.Model):
+    """One turn of a project chat, persisted so conversations survive reloads.
+
+    Two phases share this model, separated by ``phase``:
+
+    * ``intake`` — the chat that builds a draft project's brief.
+    * ``assistant`` — the ongoing project assistant that can edit info and
+      documents after the project exists. Its assistant turns may carry
+      ``proposals`` (changes awaiting the user's confirmation).
+    """
+
+    ROLE_USER = "user"
+    ROLE_ASSISTANT = "assistant"
+    ROLE_CHOICES = [
+        (ROLE_USER, "User"),
+        (ROLE_ASSISTANT, "Assistant"),
+    ]
+
+    PHASE_INTAKE = "intake"
+    PHASE_ASSISTANT = "assistant"
+    PHASE_CHOICES = [
+        (PHASE_INTAKE, "Intake"),
+        (PHASE_ASSISTANT, "Assistant"),
+    ]
+
+    # Proposal lifecycle for assistant turns that suggest changes.
+    PROPOSAL_NONE = ""
+    PROPOSAL_PENDING = "pending"
+    PROPOSAL_APPLIED = "applied"
+    PROPOSAL_DISCARDED = "discarded"
+    PROPOSAL_CHOICES = [
+        (PROPOSAL_PENDING, "Pending"),
+        (PROPOSAL_APPLIED, "Applied"),
+        (PROPOSAL_DISCARDED, "Discarded"),
+    ]
+
+    project = models.ForeignKey(
+        Project, on_delete=models.CASCADE, related_name="chat_messages",
+    )
+    phase = models.CharField(max_length=16, choices=PHASE_CHOICES, default=PHASE_INTAKE)
+    role = models.CharField(max_length=16, choices=ROLE_CHOICES)
+    content = models.TextField()
+    # Proposed changes (list of dicts) attached to an assistant turn, plus the
+    # state of that proposal. Empty/`PROPOSAL_NONE` for ordinary messages.
+    proposals = models.JSONField(default=list, blank=True)
+    proposal_status = models.CharField(
+        max_length=12, choices=PROPOSAL_CHOICES, default=PROPOSAL_NONE, blank=True,
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["created_at", "id"]
+
+    def __str__(self) -> str:
+        return f"{self.phase}/{self.role}: {self.content[:40]}"
+
+    @property
+    def has_pending_proposal(self) -> bool:
+        return self.proposal_status == self.PROPOSAL_PENDING

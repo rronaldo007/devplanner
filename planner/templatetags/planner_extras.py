@@ -24,3 +24,10 @@ def getfield(form, name):
     """
 
     return form[name]
+
+
+@register.filter(name="active_projects")
+def active_projects(user):
+    """Non-draft projects for ``user`` (drafts are hidden from listings)."""
+
+    return user.projects.filter(is_draft=False)

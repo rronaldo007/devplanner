@@ -13,20 +13,23 @@ All dashboard / document views require login and scope queries to
 
 from __future__ import annotations
 
+import json
+
 from django.contrib import messages
 from django.contrib.auth import login as auth_login
 from django.contrib.auth.decorators import login_required
-from django.http import HttpResponse, HttpResponseRedirect
+from django.http import HttpResponse, HttpResponseRedirect, JsonResponse
 from django.shortcuts import get_object_or_404, render
 from django.urls import reverse
 from django.views.decorators.http import require_http_methods
 
 from . import generators
+from .generators import chat
 from .forms import (
     CustomDocumentForm, DocumentEditForm, InterviewForm,
     RegisterForm, UserProfileForm,
 )
-from .models import Document, Project
+from .models import ChatMessage, Document, Project
 
 
 # ===========================================================================
@@ -62,14 +65,18 @@ def register(request):
 # ===========================================================================
 @login_required
 def dashboard(request):
-    projects = request.user.projects.all()
+    projects = request.user.projects.filter(is_draft=False)
+    drafts = request.user.projects.filter(is_draft=True)
     return render(
         request,
         "planner/dashboard/index.html",
         {
             "projects": projects,
+            "drafts": drafts,
             "project_count": projects.count(),
-            "document_count": Document.objects.filter(project__owner=request.user).count(),
+            "document_count": Document.objects.filter(
+                project__owner=request.user, project__is_draft=False
+            ).count(),
         },
     )
 
@@ -100,6 +107,287 @@ def project_new(request):
 
 
 @login_required
+def project_new_chat(request):
+    """Start a conversational project intake.
+
+    Creates a *draft* project immediately and seeds the transcript with the
+    assistant's opening question, then redirects to that project's chat so
+    the conversation is persisted from the very first turn. Falls back to the
+    classic interview form when no Anthropic key is configured.
+    """
+
+    if not chat.is_available(request.user):
+        messages.info(
+            request,
+            "Chat intake needs an Anthropic API key — add one in Settings to "
+            "use it. For now, here's the classic interview form.",
+        )
+        return HttpResponseRedirect(reverse("planner:project_new"))
+
+    # Resume an existing untouched draft rather than piling up duplicates:
+    # a draft with no user turns yet is effectively a fresh chat.
+    for draft in request.user.projects.filter(is_draft=True).order_by("-id"):
+        if not draft.chat_messages.filter(role=ChatMessage.ROLE_USER).exists():
+            return HttpResponseRedirect(reverse("planner:project_chat", args=[draft.pk]))
+
+    language = request.user.profile.default_language
+    project = Project.objects.create(
+        owner=request.user,
+        name="Untitled project",
+        language=language,
+        is_draft=True,
+    )
+    ChatMessage.objects.create(
+        project=project,
+        role=ChatMessage.ROLE_ASSISTANT,
+        content=chat.opening_message(language),
+    )
+    return HttpResponseRedirect(reverse("planner:project_chat", args=[project.pk]))
+
+
+@login_required
+def project_chat(request, pk):
+    """Render the chat page for a draft project, resuming its transcript."""
+
+    project = _owned_project(request, pk)
+    if not project.is_draft:
+        # Already finalised — nothing left to chat about.
+        return HttpResponseRedirect(reverse("planner:project_detail", args=[project.pk]))
+    return render(
+        request,
+        "planner/dashboard/chat.html",
+        {
+            "project": project,
+            "chat_messages": project.chat_messages.filter(
+                phase=ChatMessage.PHASE_INTAKE
+            ),
+        },
+    )
+
+
+@require_http_methods(["POST"])
+@login_required
+def project_chat_rename(request, pk):
+    """Rename a draft project from the chat (JSON in, JSON out)."""
+
+    project = _owned_project(request, pk)
+    try:
+        payload = json.loads(request.body or "{}")
+        title = (payload.get("title") or "").strip()
+    except (ValueError, TypeError):
+        return JsonResponse({"error": "bad_request"}, status=400)
+    if not title:
+        return JsonResponse({"error": "empty_title"}, status=400)
+
+    project.name = title[:120]
+    project.save(update_fields=["name"])
+    return JsonResponse({"name": project.name})
+
+
+@require_http_methods(["POST"])
+@login_required
+def project_chat_message(request, pk):
+    """Handle one chat turn for a draft project (JSON in, JSON out).
+
+    Every turn is persisted as a :class:`ChatMessage`. On the turn where
+    Claude signals the brief is complete, the draft is finalised: its fields
+    are filled in, documents are generated, and ``is_draft`` is cleared.
+    """
+
+    project = _owned_project(request, pk)
+    if not project.is_draft:
+        return JsonResponse({"error": "already_finalised"}, status=409)
+    if not chat.is_available(request.user):
+        return JsonResponse({"error": "chat_unavailable"}, status=409)
+
+    try:
+        payload = json.loads(request.body or "{}")
+        message = (payload.get("message") or "").strip()
+    except (ValueError, TypeError):
+        return JsonResponse({"error": "bad_request"}, status=400)
+    if not message:
+        return JsonResponse({"error": "empty_message"}, status=400)
+
+    # Persist the user's turn, then build the history Claude sees.
+    ChatMessage.objects.create(
+        project=project, role=ChatMessage.ROLE_USER, content=message,
+    )
+    # Give the draft a readable title from the first thing the user says.
+    if project.name in ("", "Untitled project"):
+        project.name = chat.derive_title(message)
+        project.save(update_fields=["name"])
+    history = [
+        {"role": m.role, "content": m.content}
+        for m in project.chat_messages.filter(phase=ChatMessage.PHASE_INTAKE)
+    ]
+
+    language = project.language
+    try:
+        result = chat.next_turn(
+            history,
+            api_key=chat.api_key_for_user(request.user),
+            language=language,
+        )
+    except Exception as exc:  # pragma: no cover - network/runtime safety net
+        # The user's message is already saved; they can retry without retyping.
+        return JsonResponse({"error": "claude_failed", "detail": str(exc)}, status=502)
+
+    ChatMessage.objects.create(
+        project=project, role=ChatMessage.ROLE_ASSISTANT, content=result["reply"],
+    )
+
+    if not result["done"]:
+        return JsonResponse({"reply": result["reply"], "done": False})
+
+    # Brief complete — fill in the draft and generate its documents.
+    kwargs = chat.build_project_kwargs(result["fields"])
+    for field, value in kwargs.items():
+        setattr(project, field, value)
+    project.is_draft = False
+    project.save()
+    generators.sync_default_documents(project)
+
+    messages.success(
+        request,
+        f"Project '{project.name}' created from chat and "
+        f"{len(Document.DEFAULT_KINDS)} documents generated.",
+    )
+    return JsonResponse({
+        "reply": result["reply"],
+        "done": True,
+        "redirect_url": reverse("planner:project_detail", args=[project.pk]),
+    })
+
+
+# ===========================================================================
+# Project assistant (post-creation chat that edits info + documents)
+# ===========================================================================
+@login_required
+def project_assistant(request, pk):
+    """Chat with an assistant that knows the whole project and its documents."""
+
+    project = _owned_project(request, pk)
+    if project.is_draft:
+        return HttpResponseRedirect(reverse("planner:project_chat", args=[project.pk]))
+    if not chat.is_available(request.user):
+        messages.info(
+            request,
+            "The project assistant needs an Anthropic API key — add one in Settings.",
+        )
+        return HttpResponseRedirect(reverse("planner:project_detail", args=[project.pk]))
+
+    msgs = project.chat_messages.filter(phase=ChatMessage.PHASE_ASSISTANT)
+    if not msgs.exists():
+        ChatMessage.objects.create(
+            project=project,
+            phase=ChatMessage.PHASE_ASSISTANT,
+            role=ChatMessage.ROLE_ASSISTANT,
+            content=chat.assistant_opening_message(project.language),
+        )
+    return render(
+        request,
+        "planner/dashboard/assistant.html",
+        {
+            "project": project,
+            "chat_messages": project.chat_messages.filter(
+                phase=ChatMessage.PHASE_ASSISTANT
+            ),
+        },
+    )
+
+
+@require_http_methods(["POST"])
+@login_required
+def project_assistant_message(request, pk):
+    """One project-assistant turn (JSON in, JSON out).
+
+    The reply may carry ``proposals`` — pending changes the user confirms via
+    :func:`project_assistant_apply`.
+    """
+
+    project = _owned_project(request, pk)
+    if project.is_draft:
+        return JsonResponse({"error": "draft"}, status=409)
+    if not chat.is_available(request.user):
+        return JsonResponse({"error": "chat_unavailable"}, status=409)
+
+    try:
+        payload = json.loads(request.body or "{}")
+        message = (payload.get("message") or "").strip()
+    except (ValueError, TypeError):
+        return JsonResponse({"error": "bad_request"}, status=400)
+    if not message:
+        return JsonResponse({"error": "empty_message"}, status=400)
+
+    ChatMessage.objects.create(
+        project=project, phase=ChatMessage.PHASE_ASSISTANT,
+        role=ChatMessage.ROLE_USER, content=message,
+    )
+    history = [
+        {"role": m.role, "content": m.content}
+        for m in project.chat_messages.filter(phase=ChatMessage.PHASE_ASSISTANT)
+    ]
+    context = chat.build_project_context(project)
+    try:
+        result = chat.assistant_turn(
+            history, context,
+            api_key=chat.api_key_for_user(request.user),
+            language=project.language,
+        )
+    except Exception as exc:  # pragma: no cover - network/runtime safety net
+        return JsonResponse({"error": "claude_failed", "detail": str(exc)}, status=502)
+
+    proposals = result["proposals"]
+    msg = ChatMessage.objects.create(
+        project=project, phase=ChatMessage.PHASE_ASSISTANT,
+        role=ChatMessage.ROLE_ASSISTANT, content=result["reply"],
+        proposals=proposals,
+        proposal_status=(
+            ChatMessage.PROPOSAL_PENDING if proposals else ChatMessage.PROPOSAL_NONE
+        ),
+    )
+    return JsonResponse({
+        "reply": result["reply"],
+        "message_id": msg.pk,
+        "has_proposal": bool(proposals),
+        "proposals": _proposals_summary(proposals),
+    })
+
+
+@require_http_methods(["POST"])
+@login_required
+def project_assistant_apply(request, pk):
+    """Apply or discard the pending proposal on an assistant message."""
+
+    project = _owned_project(request, pk)
+    try:
+        payload = json.loads(request.body or "{}")
+        message_id = payload.get("message_id")
+        action = payload.get("action")
+    except (ValueError, TypeError):
+        return JsonResponse({"error": "bad_request"}, status=400)
+
+    msg = get_object_or_404(
+        ChatMessage, pk=message_id, project=project,
+        phase=ChatMessage.PHASE_ASSISTANT,
+    )
+    if msg.proposal_status != ChatMessage.PROPOSAL_PENDING:
+        return JsonResponse({"error": "not_pending"}, status=409)
+
+    if action == "discard":
+        msg.proposal_status = ChatMessage.PROPOSAL_DISCARDED
+        msg.save(update_fields=["proposal_status"])
+        return JsonResponse({"status": "discarded"})
+    if action != "apply":
+        return JsonResponse({"error": "bad_action"}, status=400)
+
+    applied = _apply_changes(project, msg.proposals)
+    msg.proposal_status = ChatMessage.PROPOSAL_APPLIED
+    msg.save(update_fields=["proposal_status"])
+    return JsonResponse({"status": "applied", "applied": applied})
+
+
+@login_required
 def project_edit(request, pk):
     project = _owned_project(request, pk)
     if request.method == "POST":
@@ -122,6 +410,9 @@ def project_detail(request, pk):
     """Folder view: lists documents in the project."""
 
     project = _owned_project(request, pk)
+    if project.is_draft:
+        # Unfinished chat — resume it instead of showing an empty folder.
+        return HttpResponseRedirect(reverse("planner:project_chat", args=[project.pk]))
     docs = list(project.documents.all())
     grouped = {
         "planning": [d for d in docs if d.kind in (
@@ -292,3 +583,78 @@ def _owned_project(request, pk) -> Project:
     """Fetch a project ensuring the current user owns it (404 otherwise)."""
 
     return get_object_or_404(Project, pk=pk, owner=request.user)
+
+
+# --- Project assistant proposals -------------------------------------------
+_VALID_DOC_KINDS = dict(Document.KIND_CHOICES)
+
+
+def _proposals_summary(proposals: list) -> list[dict]:
+    """Short, display-friendly description of each proposed change."""
+
+    out = []
+    for change in proposals:
+        if change.get("type") == "document":
+            label = "Document · " + (change.get("title") or change.get("kind") or "document")
+        else:
+            label = "Field · " + str(change.get("field", "?"))
+        out.append({"label": label, "note": change.get("note", "")})
+    return out
+
+
+def _apply_changes(project: Project, proposals: list) -> list[str]:
+    """Apply each proposed change; return human-readable lines of what changed."""
+
+    applied = []
+    for change in proposals:
+        if change.get("type") == "document":
+            line = _apply_document_change(project, change)
+        elif change.get("type") == "field":
+            line = _apply_field_change(project, change)
+        else:
+            line = None
+        if line:
+            applied.append(line)
+    return applied
+
+
+def _apply_document_change(project: Project, change: dict) -> str | None:
+    body = change.get("body")
+    if not isinstance(body, str):
+        return None
+
+    doc = None
+    doc_id = change.get("document_id")
+    if doc_id:
+        doc = Document.objects.filter(pk=doc_id, project=project).first()
+
+    kind = change.get("kind")
+    if doc is None and kind in Document.DEFAULT_KINDS:
+        # Default kinds are unique per project — update in place if present.
+        doc = Document.objects.filter(project=project, kind=kind).first()
+
+    if doc is None:
+        doc = Document(
+            project=project,
+            kind=kind if kind in _VALID_DOC_KINDS else Document.KIND_CUSTOM,
+        )
+
+    title = (change.get("title") or "").strip()
+    if title:
+        doc.title = title
+    elif not doc.title:
+        doc.title = (kind or "Document").replace("_", " ").title()
+    doc.body = body
+    doc.is_generated = False  # assistant-edited; treat as hand-authored
+    doc.save()
+    return f"Updated document “{doc.title}”"
+
+
+def _apply_field_change(project: Project, change: dict) -> str | None:
+    field = change.get("field")
+    ok, value = chat.coerce_field(field, change.get("value"))
+    if not ok:
+        return None
+    setattr(project, field, value)
+    project.save()
+    return f"Updated field “{field}”"

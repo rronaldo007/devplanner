@@ -12,6 +12,7 @@ Covers:
 
 from __future__ import annotations
 
+import json
 import sys
 import types
 
@@ -22,10 +23,11 @@ from django.urls import reverse
 from .forms import InterviewForm
 from .generators import diagrams, templates as tmpl_gen
 from .generators import (
-    DEFAULT_TITLES, _api_key_for, _select_engine,
+    DEFAULT_TITLES,
     generate_all, generate_custom, sync_default_documents,
 )
-from .models import Document, Project, UserProfile
+from .generators.engine import _api_key_for, _select_engine
+from .models import ChatMessage, Document, Project, UserProfile
 
 
 User = get_user_model()
@@ -499,6 +501,194 @@ class DashboardFlowTests(TestCase):
 # ===========================================================================
 # Default titles
 # ===========================================================================
+class ProjectAssistantTests(TestCase):
+    def setUp(self):
+        self.user = _make_user(api_key="user-sk-test")
+        self.project = _make_project(self.user)  # not a draft
+        self.client.force_login(self.user)
+        self._orig = sys.modules.get("anthropic")
+
+    def tearDown(self):
+        if self._orig is None:
+            sys.modules.pop("anthropic", None)
+        else:
+            sys.modules["anthropic"] = self._orig
+
+    def _proposal_text(self, reply, changes, summary="ok"):
+        return (
+            reply + "\n" + chat_mod.PROPOSAL_MARKER + "\n"
+            + json.dumps({"summary": summary, "changes": changes})
+        )
+
+    def _send(self, message):
+        return self.client.post(
+            reverse("planner:project_assistant_message", args=[self.project.pk]),
+            data=json.dumps({"message": message}),
+            content_type="application/json",
+        )
+
+    def _apply(self, message_id, action):
+        return self.client.post(
+            reverse("planner:project_assistant_apply", args=[self.project.pk]),
+            data=json.dumps({"message_id": message_id, "action": action}),
+            content_type="application/json",
+        )
+
+    def test_page_seeds_opening_message(self):
+        _install_anthropic_stub("x")
+        resp = self.client.get(reverse("planner:project_assistant", args=[self.project.pk]))
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(
+            self.project.chat_messages.filter(phase=ChatMessage.PHASE_ASSISTANT).count(), 1
+        )
+
+    def test_draft_redirects_to_intake_chat(self):
+        _install_anthropic_stub("x")
+        draft = _make_project(self.user, name="Draft", is_draft=True)
+        resp = self.client.get(reverse("planner:project_assistant", args=[draft.pk]))
+        self.assertRedirects(resp, reverse("planner:project_chat", args=[draft.pk]))
+
+    def test_without_key_redirects_to_detail(self):
+        nokey = _make_user(username="nokey", api_key="")
+        project = _make_project(nokey)
+        self.client.force_login(nokey)
+        _install_anthropic_stub("x")  # installed, but user has no key
+        resp = self.client.get(reverse("planner:project_assistant", args=[project.pk]))
+        self.assertRedirects(resp, reverse("planner:project_detail", args=[project.pk]))
+
+    def test_plain_reply_has_no_proposal(self):
+        _install_anthropic_stub("Your stack looks solid.")
+        resp = self._send("is my stack ok?")
+        self.assertEqual(resp.status_code, 200)
+        self.assertFalse(resp.json()["has_proposal"])
+
+    def test_field_proposal_apply_updates_project(self):
+        text = self._proposal_text(
+            "I'll update the stack.",
+            [{"type": "field", "field": "stack", "value": "Django 6 + HTMX", "note": "modernised"}],
+        )
+        _install_anthropic_stub(text)
+        resp = self._send("use htmx")
+        body = resp.json()
+        self.assertTrue(body["has_proposal"])
+        self.assertEqual(self._apply(body["message_id"], "apply").json()["status"], "applied")
+        self.project.refresh_from_db()
+        self.assertEqual(self.project.stack, "Django 6 + HTMX")
+
+    def test_document_proposal_updates_existing_document(self):
+        doc = Document.objects.create(
+            project=self.project, kind=Document.KIND_USER_STORIES,
+            title="User Stories", body="old", is_generated=True,
+        )
+        text = self._proposal_text(
+            "Finishing the user stories.",
+            [{"type": "document", "document_id": doc.pk, "title": "User Stories",
+              "body": "# User Stories\n\nUS-1 ...", "note": "completed"}],
+        )
+        _install_anthropic_stub(text)
+        body = self._send("finish the user stories").json()
+        self._apply(body["message_id"], "apply")
+        doc.refresh_from_db()
+        self.assertIn("US-1", doc.body)
+        self.assertFalse(doc.is_generated)
+
+    def test_document_proposal_creates_new_custom_doc(self):
+        text = self._proposal_text(
+            "Adding an architecture doc.",
+            [{"type": "document", "kind": "custom", "title": "Architecture",
+              "body": "# Architecture\n\n...", "note": "new"}],
+        )
+        _install_anthropic_stub(text)
+        body = self._send("add an architecture doc").json()
+        self._apply(body["message_id"], "apply")
+        self.assertTrue(
+            self.project.documents.filter(kind=Document.KIND_CUSTOM, title="Architecture").exists()
+        )
+
+    def test_discard_makes_no_changes(self):
+        text = self._proposal_text(
+            "I'll change the stack.",
+            [{"type": "field", "field": "stack", "value": "SHOULD NOT APPLY"}],
+        )
+        _install_anthropic_stub(text)
+        body = self._send("change stack").json()
+        self.assertEqual(self._apply(body["message_id"], "discard").json()["status"], "discarded")
+        self.project.refresh_from_db()
+        self.assertNotEqual(self.project.stack, "SHOULD NOT APPLY")
+
+    def test_cannot_apply_twice(self):
+        text = self._proposal_text(
+            "ok", [{"type": "field", "field": "budget", "value": "10k"}]
+        )
+        _install_anthropic_stub(text)
+        body = self._send("set budget").json()
+        self._apply(body["message_id"], "apply")
+        self.assertEqual(self._apply(body["message_id"], "apply").status_code, 409)
+
+
+class ChatAssistantContinuationTests(TestCase):
+    """assistant_turn auto-continues a truncated (max_tokens) response."""
+
+    def setUp(self):
+        self._orig = sys.modules.get("anthropic")
+
+    def tearDown(self):
+        if self._orig is None:
+            sys.modules.pop("anthropic", None)
+        else:
+            sys.modules["anthropic"] = self._orig
+
+    def _install(self, chunks):
+        """chunks: list of (text, stop_reason) returned in sequence."""
+
+        class _Block:
+            def __init__(self, t):
+                self.text = t
+
+        class _Resp:
+            def __init__(self, t, sr):
+                self.content = [_Block(t)]
+                self.stop_reason = sr
+
+        class _Messages:
+            def __init__(self):
+                self.i = 0
+
+            def create(self, **kwargs):
+                t, sr = chunks[min(self.i, len(chunks) - 1)]
+                self.i += 1
+                return _Resp(t, sr)
+
+        class _Anthropic:
+            def __init__(self, *a, **k):
+                self.messages = _Messages()
+
+        module = types.ModuleType("anthropic")
+        module.Anthropic = _Anthropic
+        sys.modules["anthropic"] = module
+
+    def test_continues_until_proposal_complete(self):
+        part1 = (
+            "Working on it.\n" + chat_mod.PROPOSAL_MARKER
+            + '\n{"summary":"s","changes":[{"type":"field","field":"stack","val'
+        )
+        part2 = 'ue":"Django 6"}]}'
+        self._install([(part1, "max_tokens"), (part2, "end_turn")])
+        res = chat_mod.assistant_turn(
+            [{"role": "user", "content": "go"}], "ctx", api_key="x"
+        )
+        self.assertEqual(res["proposals"][0]["value"], "Django 6")
+        self.assertEqual(res["reply"], "Working on it.")
+
+    def test_truncation_note_when_never_completes(self):
+        self._install([("partial, no marker", "max_tokens")])
+        res = chat_mod.assistant_turn(
+            [{"role": "user", "content": "go"}], "ctx", api_key="x", language="en"
+        )
+        self.assertEqual(res["proposals"], [])
+        self.assertIn("too long", res["reply"])
+
+
 class DefaultTitlesTests(TestCase):
     def test_default_titles_cover_all_kinds(self):
         for kind in Document.DEFAULT_KINDS:
@@ -506,3 +696,319 @@ class DefaultTitlesTests(TestCase):
             en, fr = DEFAULT_TITLES[kind]
             self.assertTrue(en)
             self.assertTrue(fr)
+
+
+# ===========================================================================
+# Chat intake
+# ===========================================================================
+from .generators import chat as chat_mod  # noqa: E402
+
+
+_READY_BRIEF = {
+    "name": "Acme Tasks",
+    "problem": "Teams lose track of todos.",
+    "solution": "A focused board.",
+    "target_users": "Small eng teams.",
+    "features": ["Create board", "Add task"],
+    "personas": [{"name": "Alice", "role": "Lead", "goal": "see load"}],
+    "entities": [{"name": "Task", "fields": ["title", "done"]}],
+}
+
+
+class ChatBriefParsingTests(TestCase):
+    def test_parse_ready_extracts_json_after_marker(self):
+        text = (
+            "Great, I have what I need.\n"
+            f"{chat_mod.READY_MARKER}\n"
+            + json.dumps(_READY_BRIEF)
+        )
+        fields = chat_mod._parse_ready(text)
+        self.assertEqual(fields["name"], "Acme Tasks")
+        self.assertEqual(fields["features"], ["Create board", "Add task"])
+
+    def test_parse_ready_handles_code_fence(self):
+        text = (
+            f"Done!\n{chat_mod.READY_MARKER}\n```json\n"
+            + json.dumps(_READY_BRIEF)
+            + "\n```"
+        )
+        self.assertIsNotNone(chat_mod._parse_ready(text))
+
+    def test_parse_ready_none_without_marker(self):
+        self.assertIsNone(chat_mod._parse_ready("Just a normal question?"))
+
+    def test_build_project_kwargs_coerces_types(self):
+        kwargs = chat_mod.build_project_kwargs({
+            "name": "  Trimmed  ",
+            "features": "one\ntwo\n\n",          # string -> list
+            "nice_to_have": ["a", "", "b"],        # filters blanks
+            "personas": [{"name": "A", "role": "R", "goal": "G"}, {}],
+            "entities": [{"name": "E", "fields": ["f1", "f2"]}, {"fields": []}],
+            "unknown_key": "ignored",
+        })
+        self.assertEqual(kwargs["name"], "Trimmed")
+        self.assertEqual(kwargs["features"], ["one", "two"])
+        self.assertEqual(kwargs["nice_to_have"], ["a", "b"])
+        self.assertEqual(len(kwargs["personas"]), 1)
+        self.assertEqual(len(kwargs["entities"]), 1)
+        self.assertNotIn("unknown_key", kwargs)
+
+    def test_build_project_kwargs_defaults_name(self):
+        self.assertEqual(chat_mod.build_project_kwargs({})["name"], "Untitled project")
+
+    def test_derive_title(self):
+        self.assertEqual(chat_mod.derive_title("  a   task  app "), "a task app")
+        self.assertEqual(chat_mod.derive_title(""), "Untitled project")
+        long = chat_mod.derive_title("x" * 90)
+        self.assertTrue(long.endswith("…"))
+        self.assertLessEqual(len(long), 61)
+
+    def test_parse_proposal(self):
+        changes = [{"type": "field", "field": "stack", "value": "Django"}]
+        text = "Sure.\n" + chat_mod.PROPOSAL_MARKER + "\n" + json.dumps(
+            {"summary": "s", "changes": changes}
+        )
+        parsed, summary = chat_mod._parse_proposal(text)
+        self.assertEqual(summary, "s")
+        self.assertEqual(parsed[0]["field"], "stack")
+
+    def test_parse_proposal_none_without_marker(self):
+        parsed, summary = chat_mod._parse_proposal("just a reply")
+        self.assertIsNone(parsed)
+
+    def test_coerce_field(self):
+        self.assertEqual(chat_mod.coerce_field("stack", "  Django  "), (True, "Django"))
+        self.assertEqual(chat_mod.coerce_field("features", "a\nb"), (True, ["a", "b"]))
+        ok, _ = chat_mod.coerce_field("not_a_field", "x")
+        self.assertFalse(ok)
+
+
+class ChatWebSearchTests(TestCase):
+    def setUp(self):
+        self._orig_flag = chat_mod.WEB_SEARCH_ENABLED
+        self._orig_mod = sys.modules.get("anthropic")
+
+    def tearDown(self):
+        chat_mod.WEB_SEARCH_ENABLED = self._orig_flag
+        if self._orig_mod is None:
+            sys.modules.pop("anthropic", None)
+        else:
+            sys.modules["anthropic"] = self._orig_mod
+
+    def test_tools_built_when_enabled(self):
+        chat_mod.WEB_SEARCH_ENABLED = True
+        tools = chat_mod._build_tools()
+        self.assertEqual(tools[0]["type"], "web_search_20250305")
+
+    def test_no_tools_when_disabled(self):
+        chat_mod.WEB_SEARCH_ENABLED = False
+        self.assertEqual(chat_mod._build_tools(), [])
+
+    def _capturing_anthropic(self, captured):
+        """Install a stub that records the create() kwargs."""
+
+        class _Block:
+            text = "What's the idea?"
+
+        class _Resp:
+            content = [_Block()]
+
+        class _Messages:
+            def create(self, **kwargs):
+                captured.update(kwargs)
+                return _Resp()
+
+        class _Anthropic:
+            def __init__(self, *a, **k):
+                self.messages = _Messages()
+
+        module = types.ModuleType("anthropic")
+        module.Anthropic = _Anthropic
+        sys.modules["anthropic"] = module
+
+    def test_next_turn_forwards_web_search_tool(self):
+        chat_mod.WEB_SEARCH_ENABLED = True
+        captured = {}
+        self._capturing_anthropic(captured)
+        chat_mod.next_turn([{"role": "user", "content": "a task app"}], api_key="x")
+        self.assertIn("tools", captured)
+        self.assertEqual(captured["tools"][0]["type"], "web_search_20250305")
+
+    def test_next_turn_omits_tools_when_disabled(self):
+        chat_mod.WEB_SEARCH_ENABLED = False
+        captured = {}
+        self._capturing_anthropic(captured)
+        chat_mod.next_turn([{"role": "user", "content": "a task app"}], api_key="x")
+        self.assertNotIn("tools", captured)
+
+
+class ChatAvailabilityTests(TestCase):
+    def setUp(self):
+        self._orig = sys.modules.get("anthropic")
+
+    def tearDown(self):
+        if self._orig is None:
+            sys.modules.pop("anthropic", None)
+        else:
+            sys.modules["anthropic"] = self._orig
+
+    def test_unavailable_without_key(self):
+        user = _make_user(api_key="")
+        _install_anthropic_stub("x")
+        self.assertFalse(chat_mod.is_available(user))
+
+    def test_available_with_key_and_package(self):
+        user = _make_user(api_key="user-sk-test")
+        _install_anthropic_stub("x")
+        self.assertTrue(chat_mod.is_available(user))
+
+
+class ChatViewTests(TestCase):
+    def setUp(self):
+        self.user = _make_user(api_key="user-sk-test")
+        self.client.force_login(self.user)
+        self._orig = sys.modules.get("anthropic")
+
+    def tearDown(self):
+        if self._orig is None:
+            sys.modules.pop("anthropic", None)
+        else:
+            sys.modules["anthropic"] = self._orig
+
+    def _start_chat(self):
+        """GET the entry point (creates a draft) and return that draft."""
+
+        resp = self.client.get(reverse("planner:project_new_chat"))
+        project = Project.objects.filter(owner=self.user, is_draft=True).latest("id")
+        self.assertRedirects(resp, reverse("planner:project_chat", args=[project.pk]))
+        return project
+
+    def _post(self, pk, message):
+        return self.client.post(
+            reverse("planner:project_chat_message", args=[pk]),
+            data=json.dumps({"message": message}),
+            content_type="application/json",
+        )
+
+    def test_chat_page_without_key_redirects_to_form(self):
+        nokey = _make_user(username="nokey", api_key="")
+        self.client.force_login(nokey)
+        resp = self.client.get(reverse("planner:project_new_chat"))
+        self.assertRedirects(resp, reverse("planner:project_new"))
+        self.assertFalse(Project.objects.filter(owner=nokey).exists())
+
+    def test_starting_chat_creates_draft_with_opening(self):
+        _install_anthropic_stub("x")
+        project = self._start_chat()
+        self.assertTrue(project.is_draft)
+        opening = project.chat_messages.get()
+        self.assertEqual(opening.role, "assistant")
+
+    def test_chat_page_renders_saved_history(self):
+        _install_anthropic_stub("x")
+        project = self._start_chat()
+        ChatMessage.objects.create(project=project, role="user", content="hello there")
+        resp = self.client.get(reverse("planner:project_chat", args=[project.pk]))
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, "hello there")
+
+    def test_message_in_progress_persists_turns(self):
+        _install_anthropic_stub("What problem does it solve?")
+        project = self._start_chat()
+        resp = self._post(project.pk, "A task app")
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertFalse(body["done"])
+        self.assertIn("problem", body["reply"])
+        # opening + user turn + assistant reply
+        self.assertEqual(project.chat_messages.count(), 3)
+
+    def test_message_ready_finalises_draft(self):
+        ready = f"All set!\n{chat_mod.READY_MARKER}\n" + json.dumps(_READY_BRIEF)
+        _install_anthropic_stub(ready)
+        project = self._start_chat()
+        resp = self._post(project.pk, "that's enough")
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertTrue(body["done"])
+        project.refresh_from_db()
+        self.assertFalse(project.is_draft)
+        self.assertEqual(project.name, "Acme Tasks")
+        self.assertEqual(project.documents.count(), 6)
+        self.assertEqual(body["redirect_url"], reverse("planner:project_detail", args=[project.pk]))
+
+    def test_message_to_finalised_project_rejected(self):
+        ready = f"done\n{chat_mod.READY_MARKER}\n" + json.dumps(_READY_BRIEF)
+        _install_anthropic_stub(ready)
+        project = self._start_chat()
+        self._post(project.pk, "that's enough")  # finalises it
+        resp = self._post(project.pk, "another message")
+        self.assertEqual(resp.status_code, 409)
+
+    def test_empty_message_rejected(self):
+        _install_anthropic_stub("x")
+        project = self._start_chat()
+        resp = self._post(project.pk, "   ")
+        self.assertEqual(resp.status_code, 400)
+
+    def test_first_message_sets_draft_title(self):
+        _install_anthropic_stub("And what problem does it solve?")
+        project = self._start_chat()
+        self.assertEqual(project.name, "Untitled project")
+        self._post(project.pk, "A budgeting app for couples")
+        project.refresh_from_db()
+        self.assertEqual(project.name, "A budgeting app for couples")
+
+    def test_new_chat_reuses_untouched_draft(self):
+        _install_anthropic_stub("x")
+        p1 = self._start_chat()
+        resp = self.client.get(reverse("planner:project_new_chat"))
+        self.assertRedirects(resp, reverse("planner:project_chat", args=[p1.pk]))
+        self.assertEqual(Project.objects.filter(owner=self.user, is_draft=True).count(), 1)
+
+    def _rename(self, pk, title):
+        return self.client.post(
+            reverse("planner:project_chat_rename", args=[pk]),
+            data=json.dumps({"title": title}),
+            content_type="application/json",
+        )
+
+    def test_rename_draft(self):
+        _install_anthropic_stub("x")
+        project = self._start_chat()
+        resp = self._rename(project.pk, "My cool app")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["name"], "My cool app")
+        project.refresh_from_db()
+        self.assertEqual(project.name, "My cool app")
+
+    def test_rename_empty_rejected(self):
+        _install_anthropic_stub("x")
+        project = self._start_chat()
+        self.assertEqual(self._rename(project.pk, "   ").status_code, 400)
+
+    def test_manual_title_survives_first_message(self):
+        _install_anthropic_stub("Tell me more.")
+        project = self._start_chat()
+        self._rename(project.pk, "Renamed by hand")
+        self._post(project.pk, "a budgeting app")  # would auto-title if untouched
+        project.refresh_from_db()
+        self.assertEqual(project.name, "Renamed by hand")
+
+    def test_new_chat_after_messaging_starts_a_separate_draft(self):
+        _install_anthropic_stub("Tell me more.")
+        p1 = self._start_chat()
+        self._post(p1.pk, "first idea")  # p1 now has a user turn
+        resp = self.client.get(reverse("planner:project_new_chat"))
+        p2 = Project.objects.filter(owner=self.user, is_draft=True).exclude(pk=p1.pk).get()
+        self.assertRedirects(resp, reverse("planner:project_chat", args=[p2.pk]))
+
+    def test_draft_hidden_from_dashboard_and_resumable(self):
+        _install_anthropic_stub("x")
+        project = self._start_chat()
+        resp = self.client.get(reverse("planner:dashboard"))
+        self.assertEqual(resp.context["projects"].count(), 0)
+        self.assertIn(project, list(resp.context["drafts"]))
+        # Visiting the finished-folder URL of a draft resumes the chat.
+        detail = self.client.get(reverse("planner:project_detail", args=[project.pk]))
+        self.assertRedirects(detail, reverse("planner:project_chat", args=[project.pk]))

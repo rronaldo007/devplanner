@@ -16,7 +16,10 @@
     </p>
   </div>
   <div class="flex flex-wrap items-center gap-2">
-    <a href="{% url 'planner:document_new' project.pk %}" class="inline-flex items-center rounded-md bg-indigo-600 px-3 py-2 text-sm font-semibold text-white hover:bg-indigo-500">
+    <a href="{% url 'planner:project_assistant' project.pk %}" class="inline-flex items-center gap-1.5 rounded-md bg-indigo-600 px-3 py-2 text-sm font-semibold text-white hover:bg-indigo-500">
+      🤖 Assistant
+    </a>
+    <a href="{% url 'planner:document_new' project.pk %}" class="inline-flex items-center rounded-md border border-slate-700 px-3 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-800">
       + New document
     </a>
     <a href="{% url 'planner:project_edit' project.pk %}" class="inline-flex items-center rounded-md border border-slate-700 px-3 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-800">
