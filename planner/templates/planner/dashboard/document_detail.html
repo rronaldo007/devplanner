@@ -5,10 +5,13 @@
   {% if document.is_diagram %}
   <script type="module">
     import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs";
-    mermaid.initialize({ startOnLoad: true, theme: "default", securityLevel: "loose" });
+    // "strict" sanitizes diagram labels — bodies are user/assistant-authored, so
+    // "loose" (which allows raw HTML/JS in labels) would be an XSS vector.
+    mermaid.initialize({ startOnLoad: true, theme: "default", securityLevel: "strict" });
   </script>
   {% else %}
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
   {% endif %}
 {% endblock %}
 
@@ -56,7 +59,10 @@
     <article class="markdown" data-markdown>{{ document.body }}</article>
     <script>
       document.querySelectorAll("[data-markdown]").forEach((el) => {
-        el.innerHTML = marked.parse(el.textContent.trim());
+        // Sanitize the rendered HTML: bodies are user- and assistant-authored
+        // (incl. auto-applied assistant proposals), so raw <script>/onerror in
+        // a body must never execute in the authenticated origin.
+        el.innerHTML = DOMPurify.sanitize(marked.parse(el.textContent.trim()));
       });
     </script>
   {% endif %}

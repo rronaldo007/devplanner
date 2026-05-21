@@ -8,6 +8,8 @@ runserver`` workflow working out of the box.
 import os
 from pathlib import Path
 
+from django.core.exceptions import ImproperlyConfigured
+
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 
@@ -31,16 +33,30 @@ def _env_list(name: str, default: list[str]) -> list[str]:
 # ---------------------------------------------------------------------------
 # Security
 # ---------------------------------------------------------------------------
-# In production, set DJANGO_SECRET_KEY in the environment. The fallback is
-# only used for local development.
-SECRET_KEY = os.environ.get(
-    "DJANGO_SECRET_KEY",
-    "django-insecure-82f6)rk(xhz32uwnq9yj(3!#w#0z18jq9c+_vtfo7i20tn8eic",
+# Secure by default: a deploy that forgets to set these fails loudly or stays
+# locked down, rather than silently running insecure. For local development,
+# set DJANGO_DEBUG=1 (the dev scripts and .env.example already do).
+DEBUG = _env_bool("DJANGO_DEBUG", False)
+
+# SECRET_KEY must be provided in production. The insecure fallback is only
+# allowed when DEBUG is on, so a misconfigured production deploy raises instead
+# of running with this known, public key.
+SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY")
+if not SECRET_KEY:
+    if DEBUG:
+        SECRET_KEY = "django-insecure-82f6)rk(xhz32uwnq9yj(3!#w#0z18jq9c+_vtfo7i20tn8eic"
+    else:
+        raise ImproperlyConfigured(
+            "DJANGO_SECRET_KEY must be set when DJANGO_DEBUG is off. "
+            "Set DJANGO_DEBUG=1 for local development."
+        )
+
+# Never default to "*". Local development falls back to loopback hosts; any
+# real deployment must list its hostnames in DJANGO_ALLOWED_HOSTS.
+ALLOWED_HOSTS = _env_list(
+    "DJANGO_ALLOWED_HOSTS",
+    ["localhost", "127.0.0.1", "[::1]"] if DEBUG else [],
 )
-
-DEBUG = _env_bool("DJANGO_DEBUG", True)
-
-ALLOWED_HOSTS = _env_list("DJANGO_ALLOWED_HOSTS", ["*"] if DEBUG else [])
 
 # Comma-separated list of trusted origins for CSRF (e.g. https://devplanner.example.com).
 CSRF_TRUSTED_ORIGINS = _env_list("DJANGO_CSRF_TRUSTED_ORIGINS", [])
