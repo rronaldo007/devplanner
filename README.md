@@ -87,8 +87,8 @@ You can provide an API key in one of two ways:
 
 ```bash
 export ANTHROPIC_API_KEY=sk-ant-...
-# optional: override the model (defaults to claude-opus-4-5)
-export ANTHROPIC_MODEL=claude-opus-4-5
+# optional: override the model (defaults to claude-opus-4-7)
+export ANTHROPIC_MODEL=claude-opus-4-7
 python manage.py runserver
 ```
 
@@ -125,15 +125,15 @@ the ERD diagram.
 devplanner/
 ├── devplanner/          # Django project (settings, urls)
 └── planner/             # The single app
-    ├── generators/      # templates.py, claude.py, diagrams.py, __init__.py
+    ├── generators/      # engine.py, templates.py, claude.py, chat.py, diagrams.py, __init__.py
     ├── templates/planner/
     │   ├── public/      # home, about
     │   ├── auth/        # login, register
-    │   └── dashboard/   # index, interview, project_detail, document_*, settings
+    │   └── dashboard/   # index, interview, chat, assistant, project_detail, document_*, settings
     ├── templatetags/
-    ├── models.py        # UserProfile, Project, Document
+    ├── models.py        # UserProfile, Project, Document, ChatMessage
     ├── forms.py         # Register, UserProfile, Interview, CustomDocument, DocumentEdit
-    ├── views.py         # 18 views (public, auth, dashboard, documents, settings)
+    ├── views.py         # 21 views (public, auth, dashboard, chat, assistant, documents, settings)
     └── urls.py
 ```
 
@@ -143,9 +143,10 @@ devplanner/
 python manage.py test planner
 ```
 
-36 tests cover form parsing, template generation, Mermaid diagrams,
+76 tests cover form parsing, template generation, Mermaid diagrams,
 orchestrator engine selection, Claude (with a stubbed `anthropic` module so
-no network is needed), and the full HTTP flow including ownership isolation.
+no network is needed), the chat intake and project assistant, and the full
+HTTP flow including ownership isolation.
 
 ## Environment variables
 
@@ -160,8 +161,9 @@ no network is needed), and the full HTTP flow including ownership isolation.
 | `DJANGO_HSTS_SECONDS` | `0` | Enable HSTS in production by setting this to e.g. `31536000`. |
 | `DJANGO_SECURE_COOKIES` | `true` when DEBUG=false | Set to `false` if you are not yet on HTTPS. |
 | `ANTHROPIC_API_KEY` | empty | Global Claude key (per-user keys configured in Settings always win). |
-| `ANTHROPIC_MODEL` | `claude-opus-4-5` | Override Claude model. |
-| `ANTHROPIC_MAX_TOKENS` | `4000` | Max tokens per Claude response. |
+| `ANTHROPIC_MODEL` | `claude-opus-4-7` | Override Claude model. |
+| `ANTHROPIC_MAX_TOKENS` | `4000` | Max tokens for document-generation responses. |
+| `ANTHROPIC_INTAKE_MAX_TOKENS` | `2000` | Max tokens per chat-intake turn (short Q&A). |
 
 ## License
 

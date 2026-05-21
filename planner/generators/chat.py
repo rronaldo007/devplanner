@@ -5,8 +5,9 @@ chat: Claude interviews the user one question at a time and, once it has
 enough to fill a project brief, emits a JSON block that we parse into
 ``Project`` field values.
 
-The web layer keeps the running transcript (a list of ``{"role", "content"}``
-dicts) in the session and calls :func:`next_turn` on every user message.
+The web layer persists the running transcript as ``ChatMessage`` rows (one per
+turn, so chats survive across sessions and are resumable) and calls
+:func:`next_turn` on every user message.
 """
 
 from __future__ import annotations
@@ -16,14 +17,15 @@ import os
 import re
 from typing import TYPE_CHECKING
 
-from .claude import _extract_text  # reuse the response-block joiner
+from .claude import DEFAULT_MODEL, _extract_text  # single model source + block joiner
 
 if TYPE_CHECKING:  # pragma: no cover
     from django.contrib.auth.models import AbstractBaseUser
 
 
-DEFAULT_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-opus-4-5")
-MAX_TOKENS = int(os.environ.get("ANTHROPIC_MAX_TOKENS", "2000"))
+# Intake turns are short Q&A, so they get their own (smaller) budget, separate
+# from ANTHROPIC_MAX_TOKENS which sizes the long document-generation calls.
+INTAKE_MAX_TOKENS = int(os.environ.get("ANTHROPIC_INTAKE_MAX_TOKENS", "2000"))
 
 READY_MARKER = "===PROJECT_READY==="
 PROPOSAL_MARKER = "===PROPOSAL==="
@@ -164,7 +166,7 @@ def next_turn(
     tools = _build_tools()
     create_kwargs = {
         "model": DEFAULT_MODEL,
-        "max_tokens": MAX_TOKENS,
+        "max_tokens": INTAKE_MAX_TOKENS,
         "system": _system_prompt(language_name, web_search=bool(tools)),
         "messages": messages,
     }
