@@ -66,6 +66,7 @@ Or do it manually:
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
+export DJANGO_DEBUG=1   # local dev; without this, set DJANGO_SECRET_KEY
 python manage.py migrate
 python manage.py runserver
 ```
@@ -87,8 +88,8 @@ You can provide an API key in one of two ways:
 
 ```bash
 export ANTHROPIC_API_KEY=sk-ant-...
-# optional: override the model (defaults to claude-opus-4-5)
-export ANTHROPIC_MODEL=claude-opus-4-5
+# optional: override the model (defaults to claude-opus-4-7)
+export ANTHROPIC_MODEL=claude-opus-4-7
 python manage.py runserver
 ```
 
@@ -125,15 +126,15 @@ the ERD diagram.
 devplanner/
 ├── devplanner/          # Django project (settings, urls)
 └── planner/             # The single app
-    ├── generators/      # templates.py, claude.py, diagrams.py, __init__.py
+    ├── generators/      # engine.py, templates.py, claude.py, chat.py, diagrams.py, __init__.py
     ├── templates/planner/
     │   ├── public/      # home, about
     │   ├── auth/        # login, register
-    │   └── dashboard/   # index, interview, project_detail, document_*, settings
+    │   └── dashboard/   # index, interview, chat, assistant, project_detail, document_*, settings
     ├── templatetags/
-    ├── models.py        # UserProfile, Project, Document
+    ├── models.py        # UserProfile, Project, Document, ChatMessage
     ├── forms.py         # Register, UserProfile, Interview, CustomDocument, DocumentEdit
-    ├── views.py         # 18 views (public, auth, dashboard, documents, settings)
+    ├── views.py         # 21 views (public, auth, dashboard, chat, assistant, documents, settings)
     └── urls.py
 ```
 
@@ -143,25 +144,27 @@ devplanner/
 python manage.py test planner
 ```
 
-36 tests cover form parsing, template generation, Mermaid diagrams,
+76 tests cover form parsing, template generation, Mermaid diagrams,
 orchestrator engine selection, Claude (with a stubbed `anthropic` module so
-no network is needed), and the full HTTP flow including ownership isolation.
+no network is needed), the chat intake and project assistant, and the full
+HTTP flow including ownership isolation.
 
 ## Environment variables
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `DJANGO_SECRET_KEY` | dev-only insecure key | **Set in production.** Used for sessions, CSRF, password reset tokens. |
-| `DJANGO_DEBUG` | `true` | Set to `false` in production. |
-| `DJANGO_ALLOWED_HOSTS` | `*` when DEBUG, empty otherwise | Comma-separated list of allowed hostnames. |
+| `DJANGO_SECRET_KEY` | dev-only key (DEBUG only) | **Required when `DJANGO_DEBUG` is off** — startup raises if unset. Used for sessions, CSRF, password reset tokens. |
+| `DJANGO_DEBUG` | `false` | Set to `1`/`true` for local development. |
+| `DJANGO_ALLOWED_HOSTS` | loopback hosts when DEBUG, empty otherwise | Comma-separated list of allowed hostnames. Never defaults to `*`. |
 | `DJANGO_CSRF_TRUSTED_ORIGINS` | empty | Comma-separated origins (`https://devplanner.example.com`). |
 | `DJANGO_SQLITE_PATH` | `db.sqlite3` | Where to store SQLite when no `DATABASE_URL` is set. |
 | `DATABASE_URL` | empty | If set, used instead of SQLite (e.g. `postgres://user:pass@host:5432/db`). |
 | `DJANGO_HSTS_SECONDS` | `0` | Enable HSTS in production by setting this to e.g. `31536000`. |
 | `DJANGO_SECURE_COOKIES` | `true` when DEBUG=false | Set to `false` if you are not yet on HTTPS. |
 | `ANTHROPIC_API_KEY` | empty | Global Claude key (per-user keys configured in Settings always win). |
-| `ANTHROPIC_MODEL` | `claude-opus-4-5` | Override Claude model. |
-| `ANTHROPIC_MAX_TOKENS` | `4000` | Max tokens per Claude response. |
+| `ANTHROPIC_MODEL` | `claude-opus-4-7` | Override Claude model. |
+| `ANTHROPIC_MAX_TOKENS` | `4000` | Max tokens for document-generation responses. |
+| `ANTHROPIC_INTAKE_MAX_TOKENS` | `2000` | Max tokens per chat-intake turn (short Q&A). |
 
 ## License
 

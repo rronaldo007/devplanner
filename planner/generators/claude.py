@@ -16,7 +16,9 @@ if TYPE_CHECKING:  # pragma: no cover
     from planner.models import Project
 
 
-DEFAULT_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-opus-4-5")
+# Single source of truth for the model id (chat.py imports this). Override per
+# deployment with ANTHROPIC_MODEL, or per user via their saved API-key profile.
+DEFAULT_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-opus-4-7")
 MAX_TOKENS = int(os.environ.get("ANTHROPIC_MAX_TOKENS", "4000"))
 
 
