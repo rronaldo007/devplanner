@@ -1,0 +1,34 @@
+{% extends "planner/base.html" %}
+{% block title %}Projects · DevPlanner{% endblock %}
+
+{% block content %}
+<section class="hero">
+  <h1>Prepare your project before writing a line of code.</h1>
+  <p>
+    Answer a focused questionnaire about your idea — audience, scope, business
+    model, stack, data model — and DevPlanner generates a business plan, a
+    cahier des charges, user stories and Mermaid diagrams you can paste into
+    your repo.
+  </p>
+  <p><a class="cta-big" href="{% url 'planner:project_new' %}">Start a new project →</a></p>
+</section>
+
+<section>
+  <h2>Your projects</h2>
+  {% if projects %}
+    <ul class="project-list">
+      {% for project in projects %}
+        <li>
+          <a href="{% url 'planner:project_detail' project.pk %}">
+            <strong>{{ project.name }}</strong>
+            {% if project.tagline %}<span class="tagline">— {{ project.tagline }}</span>{% endif %}
+          </a>
+          <span class="meta">updated {{ project.updated_at|date:"M j, Y H:i" }}</span>
+        </li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <p class="muted">No projects yet. Start by creating one.</p>
+  {% endif %}
+</section>
+{% endblock %}

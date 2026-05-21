@@ -1,0 +1,25 @@
+{% load static %}<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}DevPlanner{% endblock %}</title>
+  <link rel="stylesheet" href="{% static 'planner/style.css' %}">
+  {% block head_extra %}{% endblock %}
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="{% url 'planner:home' %}">DevPlanner</a>
+    <nav>
+      <a href="{% url 'planner:home' %}">Projects</a>
+      <a class="cta" href="{% url 'planner:project_new' %}">+ New project</a>
+    </nav>
+  </header>
+  <main class="container">
+    {% block content %}{% endblock %}
+  </main>
+  <footer>
+    <small>DevPlanner · interview a project idea, get a business plan, cahier des charges, user stories and diagrams.</small>
+  </footer>
+</body>
+</html>
