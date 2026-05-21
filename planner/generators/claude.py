@@ -19,7 +19,9 @@ if TYPE_CHECKING:  # pragma: no cover
 # Single source of truth for the model id (chat.py imports this). Override per
 # deployment with ANTHROPIC_MODEL, or per user via their saved API-key profile.
 DEFAULT_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-opus-4-7")
-MAX_TOKENS = int(os.environ.get("ANTHROPIC_MAX_TOKENS", "4000"))
+# Document generation runs non-streaming, so keep this at the ~16k safe ceiling
+# for non-streaming requests (larger values risk the SDK's HTTP-timeout guard).
+MAX_TOKENS = int(os.environ.get("ANTHROPIC_MAX_TOKENS", "16000"))
 
 
 def generate_documents(project: "Project", *, api_key: str | None = None) -> dict[str, str]:

@@ -30,12 +30,12 @@ INTAKE_MAX_TOKENS = int(os.environ.get("ANTHROPIC_INTAKE_MAX_TOKENS", "2000"))
 READY_MARKER = "===PROJECT_READY==="
 PROPOSAL_MARKER = "===PROPOSAL==="
 
-# The assistant may rewrite whole document bodies, so it needs more room than
-# the intake chat's short turns.
-ASSISTANT_MAX_TOKENS = int(os.environ.get("ANTHROPIC_ASSISTANT_MAX_TOKENS", "8000"))
-# How many times to auto-continue a truncated assistant turn (prefill) so a
-# multi-document rewrite can finish in one request.
-MAX_ASSISTANT_CONTINUATIONS = int(os.environ.get("ANTHROPIC_ASSISTANT_CONTINUATIONS", "3"))
+# The assistant may rewrite several whole document bodies in one turn, so it
+# needs far more room than the intake chat's short turns. The response is
+# streamed (see assistant_turn), so a large budget is safe — opus-4-7 supports
+# up to 128k output tokens. (We no longer prefill-continue truncated turns:
+# opus-4-7 rejects assistant-message prefill.)
+ASSISTANT_MAX_TOKENS = int(os.environ.get("ANTHROPIC_ASSISTANT_MAX_TOKENS", "64000"))
 
 # Anthropic's server-side web search tool. When enabled, Claude can look facts
 # up online (competitors, market data, common stacks) while interviewing the
@@ -436,39 +436,40 @@ def assistant_turn(
         messages.pop(0)
 
     tools = _build_tools()
-    system = (
-        _assistant_system_prompt(language_name, web_search=bool(tools))
-        + "\n\n# CURRENT PROJECT CONTEXT\n"
-        + context
-    )
-
-    # Rewriting several full documents can exceed one response. When Claude
-    # stops on `max_tokens`, prefill its partial answer and let it continue,
-    # so the complete proposal is produced within this single request (and the
-    # client keeps showing its loading state the whole time).
-    text = ""
-    truncated = False
-    for attempt in range(MAX_ASSISTANT_CONTINUATIONS + 1):
-        msgs = list(messages)
-        if text:
-            msgs.append({"role": "assistant", "content": text})
-        create_kwargs = {
-            "model": DEFAULT_MODEL,
-            "max_tokens": ASSISTANT_MAX_TOKENS,
-            "system": system,
-            "messages": msgs,
+    # The system prompt + full project context is large and stable across the
+    # turns of one assistant conversation, so cache it (cache_control) to cut
+    # cost and latency on follow-up turns. Volatile content (the conversation
+    # messages) stays after it, preserving the cached prefix.
+    system = [
+        {
+            "type": "text",
+            "text": (
+                _assistant_system_prompt(language_name, web_search=bool(tools))
+                + "\n\n# CURRENT PROJECT CONTEXT\n"
+                + context
+            ),
+            "cache_control": {"type": "ephemeral"},
         }
-        # Server tools only on the first call; continuations are plain prefill.
-        if tools and not text:
-            create_kwargs["tools"] = tools
+    ]
 
-        response = client.messages.create(**create_kwargs)
-        text += _extract_text(response)
+    create_kwargs = {
+        "model": DEFAULT_MODEL,
+        "max_tokens": ASSISTANT_MAX_TOKENS,
+        "system": system,
+        "messages": messages,
+    }
+    if tools:
+        create_kwargs["tools"] = tools
 
-        if getattr(response, "stop_reason", None) != "max_tokens":
-            break
-    else:
-        truncated = True
+    # Stream the response: a multi-document rewrite can use a large max_tokens,
+    # and streaming avoids the SDK's non-streaming timeout guard on big outputs.
+    # opus-4-7 does not support assistant-message prefill, so the old
+    # continue-on-max_tokens prefill loop is gone — one generous, streamed
+    # response replaces it. The conversation always ends on a user message.
+    with client.messages.stream(**create_kwargs) as stream:
+        response = stream.get_final_message()
+    text = _extract_text(response)
+    truncated = getattr(response, "stop_reason", None) == "max_tokens"
 
     proposals, summary = _parse_proposal(text)
     reply = text
@@ -480,11 +481,11 @@ def assistant_turn(
     # silently dropping the half-written changes.
     if truncated and not proposals:
         note = (
-            " (La réponse était trop longue ; demandez-moi de continuer ou de "
-            "ne modifier qu'un document à la fois.)"
+            " (La réponse était trop longue ; demandez-moi de ne modifier qu'un "
+            "document à la fois.)"
             if language == "fr"
-            else " (That response was too long to finish — ask me to continue "
-            "or to change one document at a time.)"
+            else " (That response was too long to finish — ask me to change one "
+            "document at a time.)"
         )
         reply = (reply or "").rstrip() + note
     return {"reply": reply, "proposals": proposals or [], "summary": summary}

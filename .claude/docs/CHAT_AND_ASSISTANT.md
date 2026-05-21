@@ -89,12 +89,13 @@ with an **Apply** and **Discard** button. **Nothing is saved until you click App
 ### Finishing long / multi-document rewrites
 - The system prompt **forbids deferring work** ("I'll do it now" then stopping) — the
   full proposal must come in the same turn.
-- If a turn is cut off by the token limit (`max_tokens`), the server **auto-continues**
-  by prefilling Claude's partial answer and resuming, up to
-  `ANTHROPIC_ASSISTANT_CONTINUATIONS` times, so multi-document rewrites finish in one
-  request. While this runs, the chat keeps showing its **"Thinking…"** loading state.
-- If it still can't finish, the reply ends with an honest note ("That response was
-  too long to finish — ask me to continue or change one document at a time").
+- The assistant turn is **streamed** with a large `ANTHROPIC_ASSISTANT_MAX_TOKENS`
+  (default 64000, well within opus-4-7's 128k output limit), so multi-document rewrites
+  finish in one request. While this runs, the chat keeps showing its **"Thinking…"**
+  loading state. (No prefill-continuation: opus-4-7 rejects assistant-message prefill.)
+- If a turn still hits the token limit (`max_tokens`) without a complete proposal, the
+  reply ends with an honest note ("That response was too long to finish — ask me to
+  change one document at a time").
 
 ### Endpoints
 | Route | Name | Method | Purpose |
@@ -138,9 +139,8 @@ stacks), never the user's private details.
 | `ANTHROPIC_API_KEY` | — | Fallback key when a user has none in their profile |
 | `ANTHROPIC_MODEL` | `claude-opus-4-7` | Model for all chat/generation calls (defined once in `generators/claude.py`) |
 | `ANTHROPIC_INTAKE_MAX_TOKENS` | `2000` | Max tokens per intake turn (short Q&A) |
-| `ANTHROPIC_MAX_TOKENS` | `4000` | Max tokens for document-generation responses |
-| `ANTHROPIC_ASSISTANT_MAX_TOKENS` | `8000` | Max tokens per assistant turn (room for doc rewrites) |
-| `ANTHROPIC_ASSISTANT_CONTINUATIONS` | `3` | Auto-continue count for truncated assistant turns |
+| `ANTHROPIC_MAX_TOKENS` | `16000` | Max tokens for document-generation responses (non-streaming; ~16k is the safe ceiling) |
+| `ANTHROPIC_ASSISTANT_MAX_TOKENS` | `64000` | Max tokens per assistant turn (room for multi-doc rewrites). The turn is streamed, so a large value is safe. |
 | `ANTHROPIC_WEB_SEARCH` | `1` (on) | Enable server-side web search (`0`/`false`/`off` to disable) |
 | `ANTHROPIC_WEB_SEARCH_MAX_USES` | `5` | Max searches per turn |
 
