@@ -1,0 +1,60 @@
+{% extends "planner/_base_dashboard.html" %}
+{% block title %}Dashboard · DevPlanner{% endblock %}
+
+{% block content %}
+<div class="flex items-end justify-between">
+  <div>
+    <h1 class="text-2xl font-bold text-white">Dashboard</h1>
+    <p class="text-sm text-slate-400 mt-1">Hi {{ user.username }}, here are your projects.</p>
+  </div>
+  <a href="{% url 'planner:project_new' %}" class="inline-flex items-center rounded-md bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-500">
+    + New project
+  </a>
+</div>
+
+<div class="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-3">
+  <div class="rounded-lg border border-slate-800 bg-slate-900/50 px-4 py-3">
+    <div class="text-xs uppercase tracking-wide text-slate-500">Projects</div>
+    <div class="mt-1 text-2xl font-semibold text-white">{{ project_count }}</div>
+  </div>
+  <div class="rounded-lg border border-slate-800 bg-slate-900/50 px-4 py-3">
+    <div class="text-xs uppercase tracking-wide text-slate-500">Documents</div>
+    <div class="mt-1 text-2xl font-semibold text-white">{{ document_count }}</div>
+  </div>
+  <div class="rounded-lg border border-slate-800 bg-slate-900/50 px-4 py-3">
+    <div class="text-xs uppercase tracking-wide text-slate-500">Claude</div>
+    <div class="mt-1 text-sm font-semibold {% if user.profile.anthropic_api_key %}text-emerald-300{% else %}text-amber-300{% endif %}">
+      {% if user.profile.anthropic_api_key %}Configured{% else %}<a href="{% url 'planner:settings' %}" class="hover:underline">Add API key</a>{% endif %}
+    </div>
+  </div>
+</div>
+
+<div class="mt-8">
+  {% if projects %}
+    <div class="grid gap-3 sm:grid-cols-2">
+      {% for project in projects %}
+        <a href="{% url 'planner:project_detail' project.pk %}" class="group rounded-lg border border-slate-800 bg-slate-900/50 p-5 hover:border-indigo-500 hover:bg-slate-900 transition">
+          <div class="flex items-start gap-3">
+            <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-indigo-600/15 text-indigo-300">📁</div>
+            <div class="min-w-0 flex-1">
+              <h3 class="truncate font-semibold text-white group-hover:text-indigo-300">{{ project.name }}</h3>
+              {% if project.tagline %}<p class="mt-0.5 truncate text-sm text-slate-400">{{ project.tagline }}</p>{% endif %}
+              <p class="mt-2 text-xs text-slate-500">
+                {{ project.documents.count }} document{{ project.documents.count|pluralize }} · updated {{ project.updated_at|date:"M j, Y" }}
+              </p>
+            </div>
+          </div>
+        </a>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="rounded-lg border border-dashed border-slate-700 px-6 py-12 text-center">
+      <h3 class="text-lg font-semibold text-white">No projects yet</h3>
+      <p class="mt-2 text-sm text-slate-400">Start by creating your first project — it takes about 5 minutes.</p>
+      <a href="{% url 'planner:project_new' %}" class="mt-4 inline-flex items-center rounded-md bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-500">
+        Start a project
+      </a>
+    </div>
+  {% endif %}
+</div>
+{% endblock %}

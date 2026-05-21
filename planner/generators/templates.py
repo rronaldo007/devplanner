@@ -272,3 +272,31 @@ def _bullets(items) -> list[str]:
     if not items:
         return ["—"]
     return [f"- {x}" for x in items]
+
+
+def custom_stub(project: "Project", title: str, prompt: str) -> str:
+    """Fallback used when no Claude key is available for a custom doc.
+
+    Records the prompt so the user can write the doc themselves and shows
+    the project context inline.
+    """
+
+    lines = [
+        f"# {title}",
+        "",
+        "> _This document is a starter. Add your Claude API key in Settings to "
+        "generate it automatically next time._",
+        "",
+    ]
+    if prompt:
+        lines.extend(["## Instructions", prompt, ""])
+    lines.append(f"## Context: {project.name}")
+    if project.tagline:
+        lines.append(project.tagline)
+    if project.problem:
+        lines.append("")
+        lines.append("**Problem:** " + project.problem)
+    if project.solution:
+        lines.append("")
+        lines.append("**Solution:** " + project.solution)
+    return "\n".join(lines).strip() + "\n"

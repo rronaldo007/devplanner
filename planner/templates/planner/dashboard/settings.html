@@ -1,0 +1,57 @@
+{% extends "planner/_base_dashboard.html" %}
+{% block title %}Settings · DevPlanner{% endblock %}
+
+{% block content %}
+<h1 class="text-2xl font-bold text-white">Settings</h1>
+<p class="mt-1 text-sm text-slate-400">Per-account configuration for {{ user.username }}.</p>
+
+<div class="mt-6 grid gap-6 lg:grid-cols-3">
+  <div class="lg:col-span-2 rounded-xl border border-slate-800 bg-slate-900/40 p-6">
+    <h2 class="text-lg font-semibold text-white">Claude generation</h2>
+    <p class="mt-1 text-sm text-slate-400">
+      Add your Anthropic API key to use Claude (model:
+      <code class="text-indigo-300">claude-opus-4-5</code>) for richer document
+      generation. Without a key, DevPlanner uses built-in templates.
+    </p>
+
+    <form method="post" class="mt-5 space-y-4 max-w-xl">
+      {% csrf_token %}
+      {% for field in form %}
+        <div class="field">
+          <label for="{{ field.id_for_label }}">{{ field.label }}</label>
+          {{ field }}
+          {% if field.help_text %}<p class="hint">{{ field.help_text }}</p>{% endif %}
+          {% if field.errors %}<div class="errors">{{ field.errors }}</div>{% endif %}
+        </div>
+      {% endfor %}
+      <button type="submit" class="inline-flex items-center rounded-md bg-indigo-600 px-5 py-2.5 font-semibold text-white hover:bg-indigo-500">
+        Save settings
+      </button>
+    </form>
+  </div>
+
+  <aside class="rounded-xl border border-slate-800 bg-slate-900/40 p-6">
+    <h3 class="text-sm font-semibold uppercase tracking-wider text-slate-400">Status</h3>
+    <dl class="mt-3 space-y-3 text-sm">
+      <div>
+        <dt class="text-slate-500">Claude API key</dt>
+        <dd class="mt-0.5 font-medium {% if profile.anthropic_api_key %}text-emerald-300{% else %}text-amber-300{% endif %}">
+          {% if profile.anthropic_api_key %}Configured{% else %}Not set — using templates{% endif %}
+        </dd>
+      </div>
+      <div>
+        <dt class="text-slate-500">Default language</dt>
+        <dd class="mt-0.5 font-medium text-slate-100">{{ profile.get_default_language_display }}</dd>
+      </div>
+      <div>
+        <dt class="text-slate-500">Projects</dt>
+        <dd class="mt-0.5 font-medium text-slate-100">{{ user.projects.count }}</dd>
+      </div>
+    </dl>
+    <p class="mt-6 text-xs text-slate-500">
+      Your API key is stored in your account and used only when generating
+      documents. It is never logged.
+    </p>
+  </aside>
+</div>
+{% endblock %}

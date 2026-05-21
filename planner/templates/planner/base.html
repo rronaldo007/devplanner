@@ -1,25 +1,61 @@
 {% load static %}<!doctype html>
-<html lang="en">
+<html lang="en" class="h-full">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}DevPlanner{% endblock %}</title>
-  <link rel="stylesheet" href="{% static 'planner/style.css' %}">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Inter', 'ui-sans-serif', 'system-ui', '-apple-system', 'sans-serif'],
+            mono: ['ui-monospace', 'SFMono-Regular', 'Menlo', 'monospace'],
+          },
+        },
+      },
+    };
+  </script>
+  <link rel="preconnect" href="https://rsms.me/">
+  <link rel="stylesheet" href="https://rsms.me/inter/inter.css">
+  <style type="text/tailwindcss">
+    @layer base {
+      body { font-family: 'Inter', system-ui, sans-serif; }
+    }
+    @layer components {
+      .field input[type="text"],
+      .field input[type="email"],
+      .field input[type="password"],
+      .field input[type="number"],
+      .field input[type="url"],
+      .field textarea,
+      .field select {
+        @apply w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-slate-100 placeholder-slate-500 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500;
+      }
+      .field textarea { @apply font-mono text-sm; }
+      .field label { @apply block text-sm font-medium text-slate-200 mb-1; }
+      .field .hint { @apply mt-1 text-xs text-slate-400; }
+      .field .errors { @apply mt-1 text-xs text-red-400; }
+      .field ul { @apply mt-1 text-xs text-slate-400 list-disc pl-5; }
+
+      .markdown h1 { @apply text-2xl font-bold mt-0 mb-3 text-slate-100; }
+      .markdown h2 { @apply text-xl font-semibold mt-6 mb-2 text-slate-100; }
+      .markdown h3 { @apply text-lg font-semibold mt-4 mb-2 text-slate-100; }
+      .markdown p  { @apply my-2 text-slate-300 leading-relaxed; }
+      .markdown ul { @apply list-disc pl-6 my-2 text-slate-300; }
+      .markdown ol { @apply list-decimal pl-6 my-2 text-slate-300; }
+      .markdown li { @apply my-1; }
+      .markdown code { @apply bg-slate-950 px-1.5 py-0.5 rounded text-indigo-300 text-sm; }
+      .markdown pre { @apply bg-slate-950 p-3 rounded-md my-3 overflow-x-auto; }
+      .markdown blockquote { @apply border-l-2 border-slate-600 pl-3 italic text-slate-400 my-2; }
+      .markdown strong { @apply text-slate-100; }
+      .markdown a { @apply text-indigo-400 hover:underline; }
+    }
+  </style>
   {% block head_extra %}{% endblock %}
 </head>
-<body>
-  <header class="topbar">
-    <a class="brand" href="{% url 'planner:home' %}">DevPlanner</a>
-    <nav>
-      <a href="{% url 'planner:home' %}">Projects</a>
-      <a class="cta" href="{% url 'planner:project_new' %}">+ New project</a>
-    </nav>
-  </header>
-  <main class="container">
-    {% block content %}{% endblock %}
-  </main>
-  <footer>
-    <small>DevPlanner · interview a project idea, get a business plan, cahier des charges, user stories and diagrams.</small>
-  </footer>
+<body class="h-full bg-slate-950 text-slate-100 antialiased">
+  {% block body %}{% endblock %}
 </body>
 </html>

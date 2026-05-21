@@ -1,0 +1,42 @@
+{% extends "planner/_base_public.html" %}
+{% block title %}About · DevPlanner{% endblock %}
+
+{% block content %}
+<section class="max-w-3xl mx-auto px-6 py-16">
+  <h1 class="text-3xl font-bold text-white">About DevPlanner</h1>
+  <p class="mt-4 text-slate-300 leading-relaxed">
+    DevPlanner is a small Django app for developers who want to think a
+    project through <em>before</em> they start typing. You answer a focused
+    interview about your idea — who it's for, what's in scope, how it makes
+    money, what the stack looks like, what data lives where — and DevPlanner
+    turns the answers into:
+  </p>
+  <ul class="mt-4 list-disc pl-6 text-slate-300 space-y-1">
+    <li>a <strong class="text-white">Business Plan</strong></li>
+    <li>a <strong class="text-white">Cahier des Charges</strong> (specifications document)</li>
+    <li><strong class="text-white">User Stories</strong> for every persona</li>
+    <li>three <strong class="text-white">Mermaid diagrams</strong>: use case, entity-relationship, user flow</li>
+    <li>any <strong class="text-white">custom documents</strong> you want to add — e.g. a technical architecture, a deployment plan, a README draft</li>
+  </ul>
+
+  <h2 class="mt-10 text-xl font-semibold text-white">Two engines</h2>
+  <p class="mt-2 text-slate-300 leading-relaxed">
+    Documents are written either by built-in templates (FR or EN, fully
+    deterministic) or by <strong class="text-white">Anthropic Claude</strong>
+    when you add your API key in Settings. Diagrams are always produced
+    deterministically from the data so the Mermaid syntax stays valid.
+  </p>
+
+  <h2 class="mt-10 text-xl font-semibold text-white">Multi-user</h2>
+  <p class="mt-2 text-slate-300 leading-relaxed">
+    Every account has its own dashboard, its own projects, and its own
+    Claude API key. Nothing leaks between users.
+  </p>
+
+  <div class="mt-10">
+    <a href="{% url 'planner:register' %}" class="inline-flex items-center rounded-md bg-indigo-600 px-5 py-3 font-semibold text-white hover:bg-indigo-500">
+      Create your account →
+    </a>
+  </div>
+</section>
+{% endblock %}

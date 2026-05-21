@@ -1,0 +1,64 @@
+{% extends "planner/_base_dashboard.html" %}
+{% block title %}{{ document.title }} · {{ project.name }} · DevPlanner{% endblock %}
+
+{% block head_extra %}
+  {% if document.is_diagram %}
+  <script type="module">
+    import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs";
+    mermaid.initialize({ startOnLoad: true, theme: "default", securityLevel: "loose" });
+  </script>
+  {% else %}
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  {% endif %}
+{% endblock %}
+
+{% block content %}
+<div class="flex flex-wrap items-start justify-between gap-3">
+  <div class="min-w-0">
+    <div class="flex items-center gap-2 text-sm text-slate-400">
+      <a href="{% url 'planner:dashboard' %}" class="hover:text-white">Projects</a>
+      <span>/</span>
+      <a href="{% url 'planner:project_detail' project.pk %}" class="hover:text-white truncate max-w-[180px]">{{ project.name }}</a>
+      <span>/</span>
+      <span class="text-slate-200 truncate max-w-[200px]">{{ document.title }}</span>
+    </div>
+    <h1 class="mt-1 text-2xl font-bold text-white">{{ document.title }}</h1>
+    <p class="mt-1 text-xs text-slate-500">
+      {{ document.get_kind_display }} · updated {{ document.updated_at|date:"M j, Y H:i" }}
+      {% if not document.is_generated %} · <span class="text-amber-300">hand-edited</span>{% endif %}
+    </p>
+  </div>
+
+  <div class="flex flex-wrap items-center gap-2">
+    <a href="{% url 'planner:document_edit' project.pk document.pk %}" class="inline-flex items-center rounded-md border border-slate-700 px-3 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-800">Edit</a>
+    <form action="{% url 'planner:document_regenerate' project.pk document.pk %}" method="post" class="inline">
+      {% csrf_token %}
+      <button type="submit" class="inline-flex items-center rounded-md border border-slate-700 px-3 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-800">Regenerate</button>
+    </form>
+    <a href="{% url 'planner:document_download' project.pk document.pk %}?download=1" class="inline-flex items-center rounded-md border border-slate-700 px-3 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-800">Download .md</a>
+    {% if document.kind == 'custom' %}
+      <form action="{% url 'planner:document_delete' project.pk document.pk %}" method="post" onsubmit="return confirm('Delete this document?');" class="inline">
+        {% csrf_token %}
+        <button type="submit" class="inline-flex items-center rounded-md border border-red-700 px-3 py-2 text-sm font-semibold text-red-300 hover:bg-red-900/30">Delete</button>
+      </form>
+    {% endif %}
+  </div>
+</div>
+
+<div class="mt-6 rounded-xl border border-slate-800 bg-slate-900/30 p-6">
+  {% if document.is_diagram %}
+    <div class="mermaid bg-white rounded-md p-4 overflow-x-auto text-slate-900">{{ document.body }}</div>
+    <details class="mt-4">
+      <summary class="cursor-pointer text-xs text-slate-400 hover:text-white">View Mermaid source</summary>
+      <pre class="mt-2 overflow-x-auto rounded-md bg-slate-950 p-3 text-xs text-slate-300">{{ document.body }}</pre>
+    </details>
+  {% else %}
+    <article class="markdown" data-markdown>{{ document.body }}</article>
+    <script>
+      document.querySelectorAll("[data-markdown]").forEach((el) => {
+        el.innerHTML = marked.parse(el.textContent.trim());
+      });
+    </script>
+  {% endif %}
+</div>
+{% endblock %}

@@ -1,0 +1,35 @@
+{% extends "planner/_base_dashboard.html" %}
+{% block title %}Edit {{ document.title }} · DevPlanner{% endblock %}
+
+{% block content %}
+<div class="flex items-center gap-2 text-sm text-slate-400">
+  <a href="{% url 'planner:project_detail' project.pk %}" class="hover:text-white">{{ project.name }}</a>
+  <span>/</span>
+  <a href="{% url 'planner:document_detail' project.pk document.pk %}" class="hover:text-white truncate max-w-[200px]">{{ document.title }}</a>
+  <span>/</span>
+  <span class="text-slate-200">Edit</span>
+</div>
+<h1 class="mt-1 text-2xl font-bold text-white">Edit document</h1>
+
+<form method="post" class="mt-6 space-y-4">
+  {% csrf_token %}
+  <div class="field">
+    <label for="{{ form.title.id_for_label }}">Title</label>
+    {{ form.title }}
+    {% if form.title.errors %}<div class="errors">{{ form.title.errors }}</div>{% endif %}
+  </div>
+  <div class="field">
+    <label for="{{ form.body.id_for_label }}">
+      Body
+      {% if document.is_diagram %}<span class="text-xs font-normal text-emerald-300">(Mermaid)</span>
+      {% else %}<span class="text-xs font-normal text-slate-400">(Markdown)</span>{% endif %}
+    </label>
+    {{ form.body }}
+    {% if form.body.errors %}<div class="errors">{{ form.body.errors }}</div>{% endif %}
+  </div>
+  <div class="flex items-center gap-3">
+    <button type="submit" class="inline-flex items-center rounded-md bg-indigo-600 px-5 py-2.5 font-semibold text-white hover:bg-indigo-500">Save</button>
+    <a href="{% url 'planner:document_detail' project.pk document.pk %}" class="text-sm text-slate-300 hover:text-white">Cancel</a>
+  </div>
+</form>
+{% endblock %}

@@ -20,12 +20,12 @@ DEFAULT_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-opus-4-5")
 MAX_TOKENS = int(os.environ.get("ANTHROPIC_MAX_TOKENS", "4000"))
 
 
-def generate_documents(project: "Project") -> dict[str, str]:
+def generate_documents(project: "Project", *, api_key: str | None = None) -> dict[str, str]:
     """Generate business plan, specifications and user stories via Claude."""
 
     import anthropic
 
-    client = anthropic.Anthropic()
+    client = anthropic.Anthropic(api_key=api_key) if api_key else anthropic.Anthropic()
     project_json = _project_to_json(project)
     language_name = "French" if project.language == "fr" else "English"
 
@@ -71,6 +71,40 @@ def generate_documents(project: "Project") -> dict[str, str]:
     )
     text = _extract_text(response)
     return _split_markers(text)
+
+
+def generate_custom(
+    project: "Project", *, title: str, prompt: str, api_key: str | None = None
+) -> str:
+    """Generate one custom document body from a free-form prompt."""
+
+    import anthropic
+
+    client = anthropic.Anthropic(api_key=api_key) if api_key else anthropic.Anthropic()
+    language_name = "French" if project.language == "fr" else "English"
+    system = (
+        "You are a senior software product manager and tech lead. Using the "
+        "project brief (JSON) as context, write the requested document in "
+        f"clean GitHub-flavored Markdown, in {language_name}. Do not invent "
+        "facts that contradict the brief. Return Markdown only, no preamble."
+    )
+    user_msg = (
+        "Project brief (JSON):\n```json\n"
+        + _project_to_json(project)
+        + "\n```\n\n"
+        + f"Document title: {title}\n\n"
+        + f"Instructions:\n{prompt or 'Write this document for the project.'}"
+    )
+    response = client.messages.create(
+        model=DEFAULT_MODEL,
+        max_tokens=MAX_TOKENS,
+        system=system,
+        messages=[{"role": "user", "content": user_msg}],
+    )
+    body = _extract_text(response)
+    if not body.lstrip().startswith("#"):
+        body = f"# {title}\n\n{body}"
+    return body.strip() + "\n"
 
 
 # ---------------------------------------------------------------------------

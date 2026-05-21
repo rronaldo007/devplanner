@@ -1,0 +1,42 @@
+{% extends "planner/_base_dashboard.html" %}
+{% block title %}{{ project.name }} · DevPlanner{% endblock %}
+
+{% block content %}
+<div class="flex flex-wrap items-start justify-between gap-3">
+  <div>
+    <div class="flex items-center gap-2 text-sm text-slate-400">
+      <a href="{% url 'planner:dashboard' %}" class="hover:text-white">Projects</a>
+      <span>/</span>
+      <span class="text-slate-200">{{ project.name }}</span>
+    </div>
+    <h1 class="mt-1 text-2xl font-bold text-white">{{ project.name }}</h1>
+    {% if project.tagline %}<p class="mt-1 text-slate-400">{{ project.tagline }}</p>{% endif %}
+    <p class="mt-2 text-xs text-slate-500">
+      {{ doc_count }} document{{ doc_count|pluralize }} · language: {{ project.get_language_display }} · updated {{ project.updated_at|date:"M j, Y H:i" }}
+    </p>
+  </div>
+  <div class="flex flex-wrap items-center gap-2">
+    <a href="{% url 'planner:document_new' project.pk %}" class="inline-flex items-center rounded-md bg-indigo-600 px-3 py-2 text-sm font-semibold text-white hover:bg-indigo-500">
+      + New document
+    </a>
+    <a href="{% url 'planner:project_edit' project.pk %}" class="inline-flex items-center rounded-md border border-slate-700 px-3 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-800">
+      Edit interview
+    </a>
+    <form action="{% url 'planner:project_delete' project.pk %}" method="post" onsubmit="return confirm('Delete this project and all its documents?');">
+      {% csrf_token %}
+      <button type="submit" class="inline-flex items-center rounded-md border border-red-700 px-3 py-2 text-sm font-semibold text-red-300 hover:bg-red-900/30">Delete</button>
+    </form>
+  </div>
+</div>
+
+{% include "planner/dashboard/_doc_group.html" with title="Planning documents" docs=groups.planning %}
+{% include "planner/dashboard/_doc_group.html" with title="Diagrams" docs=groups.diagrams %}
+{% include "planner/dashboard/_doc_group.html" with title="Custom documents" docs=groups.custom %}
+
+{% if not groups.custom %}
+  <div class="mt-3 rounded-lg border border-dashed border-slate-800 px-6 py-8 text-center">
+    <p class="text-sm text-slate-400">Need an architecture doc, a deployment plan, a README draft?</p>
+    <a href="{% url 'planner:document_new' project.pk %}" class="mt-3 inline-flex items-center rounded-md bg-indigo-600 px-3 py-2 text-sm font-semibold text-white hover:bg-indigo-500">+ Add a custom document</a>
+  </div>
+{% endif %}
+{% endblock %}

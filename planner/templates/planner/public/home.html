@@ -1,0 +1,58 @@
+{% extends "planner/_base_public.html" %}
+{% block title %}DevPlanner · prepare your project before writing a line of code{% endblock %}
+
+{% block content %}
+<section class="px-6 py-20 sm:py-28">
+  <div class="max-w-3xl mx-auto text-center">
+    <span class="inline-flex items-center rounded-full border border-indigo-400/30 bg-indigo-500/10 px-3 py-1 text-xs font-medium text-indigo-300">
+      For developers who hate writing specs from scratch
+    </span>
+    <h1 class="mt-6 text-4xl sm:text-5xl font-bold tracking-tight text-white">
+      Prepare your project before<br>writing a line of code.
+    </h1>
+    <p class="mt-6 text-lg text-slate-300">
+      Answer a focused interview about your idea and DevPlanner generates a
+      business plan, a cahier des charges, user stories, and Mermaid
+      diagrams — all stored in a project folder you can edit, regenerate,
+      and add to.
+    </p>
+    <div class="mt-8 flex items-center justify-center gap-3">
+      <a href="{% url 'planner:register' %}" class="inline-flex items-center rounded-md bg-indigo-600 px-5 py-3 font-semibold text-white hover:bg-indigo-500">
+        Create your account →
+      </a>
+      <a href="{% url 'planner:about' %}" class="inline-flex items-center rounded-md border border-slate-700 px-5 py-3 font-semibold text-slate-200 hover:bg-slate-800">
+        Learn more
+      </a>
+    </div>
+  </div>
+</section>
+
+<section class="px-6 pb-24">
+  <div class="max-w-6xl mx-auto grid gap-6 md:grid-cols-3">
+    <div class="rounded-xl border border-slate-800 bg-slate-900/50 p-6">
+      <div class="inline-flex h-10 w-10 items-center justify-center rounded-lg bg-indigo-500/15 text-indigo-300">📝</div>
+      <h3 class="mt-4 text-lg font-semibold text-white">Focused interview</h3>
+      <p class="mt-2 text-sm text-slate-400">
+        Seven sections, just the right questions. Identity, problem, audience,
+        scope, business, stack, constraints.
+      </p>
+    </div>
+    <div class="rounded-xl border border-slate-800 bg-slate-900/50 p-6">
+      <div class="inline-flex h-10 w-10 items-center justify-center rounded-lg bg-indigo-500/15 text-indigo-300">📦</div>
+      <h3 class="mt-4 text-lg font-semibold text-white">Project folders</h3>
+      <p class="mt-2 text-sm text-slate-400">
+        Every project ships with a business plan, cahier des charges, user
+        stories, and three diagrams. Add your own custom docs anytime.
+      </p>
+    </div>
+    <div class="rounded-xl border border-slate-800 bg-slate-900/50 p-6">
+      <div class="inline-flex h-10 w-10 items-center justify-center rounded-lg bg-indigo-500/15 text-indigo-300">🤖</div>
+      <h3 class="mt-4 text-lg font-semibold text-white">Powered by Claude</h3>
+      <p class="mt-2 text-sm text-slate-400">
+        Drop in your Anthropic API key in Settings and DevPlanner uses Claude
+        for richer outputs. No key? Built-in templates work too.
+      </p>
+    </div>
+  </div>
+</section>
+{% endblock %}
