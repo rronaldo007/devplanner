@@ -49,6 +49,19 @@ docker compose --profile postgres up --build
 
 ### Without Docker
 
+The fastest path is the dev scripts in `scripts/`, which create a virtualenv,
+install requirements, run migrations, and launch the auto-reloading dev server:
+
+```bash
+scripts/start.sh      # set up + start (http://127.0.0.1:8000/)
+scripts/refresh.sh    # restart after pulling code / changing deps or models
+scripts/stop.sh       # stop the dev server
+
+PORT=8001 scripts/start.sh   # use a different port if 8000 is taken
+```
+
+Or do it manually:
+
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
