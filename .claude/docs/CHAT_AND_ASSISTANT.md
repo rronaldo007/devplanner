@@ -136,8 +136,9 @@ stacks), never the user's private details.
 | Variable | Default | Effect |
 |----------|---------|--------|
 | `ANTHROPIC_API_KEY` | — | Fallback key when a user has none in their profile |
-| `ANTHROPIC_MODEL` | `claude-opus-4-5` | Model for all chat/generation calls |
-| `ANTHROPIC_MAX_TOKENS` | `2000` | Max tokens per intake turn |
+| `ANTHROPIC_MODEL` | `claude-opus-4-7` | Model for all chat/generation calls (defined once in `generators/claude.py`) |
+| `ANTHROPIC_INTAKE_MAX_TOKENS` | `2000` | Max tokens per intake turn (short Q&A) |
+| `ANTHROPIC_MAX_TOKENS` | `4000` | Max tokens for document-generation responses |
 | `ANTHROPIC_ASSISTANT_MAX_TOKENS` | `8000` | Max tokens per assistant turn (room for doc rewrites) |
 | `ANTHROPIC_ASSISTANT_CONTINUATIONS` | `3` | Auto-continue count for truncated assistant turns |
 | `ANTHROPIC_WEB_SEARCH` | `1` (on) | Enable server-side web search (`0`/`false`/`off` to disable) |

@@ -223,6 +223,7 @@ class ChatMessage(models.Model):
     PROPOSAL_APPLIED = "applied"
     PROPOSAL_DISCARDED = "discarded"
     PROPOSAL_CHOICES = [
+        (PROPOSAL_NONE, "None"),
         (PROPOSAL_PENDING, "Pending"),
         (PROPOSAL_APPLIED, "Applied"),
         (PROPOSAL_DISCARDED, "Discarded"),
