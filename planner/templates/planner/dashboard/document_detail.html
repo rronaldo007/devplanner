@@ -39,6 +39,9 @@
       <button type="submit" class="inline-flex items-center rounded-md border border-slate-700 px-3 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-800">Regenerate</button>
     </form>
     <a href="{% url 'planner:document_download' project.pk document.pk %}?download=1" class="inline-flex items-center rounded-md border border-slate-700 px-3 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-800">Download .md</a>
+    {% if document.is_diagram %}
+      <a href="{% url 'planner:document_drawio' project.pk document.pk %}" class="inline-flex items-center rounded-md border border-slate-700 px-3 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-800">Download .drawio</a>
+    {% endif %}
     {% if document.kind == 'custom' %}
       <form action="{% url 'planner:document_delete' project.pk document.pk %}" method="post" onsubmit="return confirm('Delete this document?');" class="inline">
         {% csrf_token %}
