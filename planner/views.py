@@ -18,6 +18,7 @@ import json
 from django.contrib import messages
 from django.contrib.auth import login as auth_login
 from django.contrib.auth.decorators import login_required
+from django.db import transaction
 from django.http import Http404, HttpResponse, HttpResponseRedirect, JsonResponse
 from django.shortcuts import get_object_or_404, render
 from django.urls import reverse
@@ -610,6 +611,35 @@ def _owned_project(request, pk) -> Project:
 # --- Project assistant proposals -------------------------------------------
 _VALID_DOC_KINDS = dict(Document.KIND_CHOICES)
 
+# Project fields that deterministically feed each diagram (mirrors the field
+# reads in planner/generators/diagrams.py). When the assistant changes one of
+# these, the affected diagram documents are regenerated from the new fields —
+# diagrams are never hand-written.
+_DIAGRAM_FIELD_MAP = {
+    "personas": (Document.KIND_USE_CASE_DIAGRAM,),
+    "features": (Document.KIND_USE_CASE_DIAGRAM, Document.KIND_FLOW_DIAGRAM),
+    "entities": (Document.KIND_ERD_DIAGRAM,),
+    "success_metrics": (Document.KIND_FLOW_DIAGRAM,),
+    "name": (Document.KIND_USE_CASE_DIAGRAM, Document.KIND_FLOW_DIAGRAM),
+}
+
+
+def _regenerate_diagrams(project: Project, kinds) -> list[str]:
+    """Refresh existing diagram docs whose source fields changed.
+
+    Diagrams are a deterministic projection of project fields, so we rebuild
+    them via :func:`generators.regenerate` rather than store hand-written
+    bodies. Only regenerates diagram docs that exist (drafts may not have any).
+    """
+
+    lines: list[str] = []
+    for doc in project.documents.filter(kind__in=set(kinds)):
+        doc.body = generators.regenerate(doc)
+        doc.is_generated = True
+        doc.save(update_fields=["body", "is_generated", "updated_at"])
+        lines.append(f"Regenerated diagram “{doc.title}”")
+    return lines
+
 
 def _proposals_summary(proposals: list) -> list[dict]:
     """Short, display-friendly description of each proposed change."""
@@ -625,18 +655,29 @@ def _proposals_summary(proposals: list) -> list[dict]:
 
 
 def _apply_changes(project: Project, proposals: list) -> list[str]:
-    """Apply each proposed change; return human-readable lines of what changed."""
+    """Apply each proposed change; return human-readable lines of what changed.
 
-    applied = []
-    for change in proposals:
-        if change.get("type") == "document":
-            line = _apply_document_change(project, change)
-        elif change.get("type") == "field":
-            line = _apply_field_change(project, change)
-        else:
-            line = None
-        if line:
-            applied.append(line)
+    Field changes that feed diagrams trigger a single deterministic
+    regeneration of the affected diagram documents at the end. The whole batch
+    is atomic so field saves and diagram rebuilds commit together.
+    """
+
+    applied: list[str] = []
+    dirty_diagram_kinds: set[str] = set()
+    with transaction.atomic():
+        for change in proposals:
+            ctype = change.get("type")
+            if ctype == "document":
+                line = _apply_document_change(project, change)
+            elif ctype == "field":
+                line, field = _apply_field_change(project, change)
+                if line and field in _DIAGRAM_FIELD_MAP:
+                    dirty_diagram_kinds.update(_DIAGRAM_FIELD_MAP[field])
+            else:
+                line = None
+            if line:
+                applied.append(line)
+        applied.extend(_regenerate_diagrams(project, dirty_diagram_kinds))
     return applied
 
 
@@ -651,6 +692,21 @@ def _apply_document_change(project: Project, change: dict) -> str | None:
         doc = Document.objects.filter(pk=doc_id, project=project).first()
 
     kind = change.get("kind")
+
+    # Diagrams are a deterministic projection of project fields — never store a
+    # hand-written diagram body. Discard the proposed body and regenerate from
+    # the current fields instead (no-op for a draft without the diagram doc).
+    target_kind = doc.kind if doc is not None else kind
+    if target_kind in Document.DIAGRAM_KINDS:
+        if doc is None:
+            doc = Document.objects.filter(project=project, kind=target_kind).first()
+        if doc is None:
+            return None
+        doc.body = generators.regenerate(doc)
+        doc.is_generated = True
+        doc.save(update_fields=["body", "is_generated", "updated_at"])
+        return f"Regenerated diagram “{doc.title}” from project fields"
+
     if doc is None and kind in Document.DEFAULT_KINDS:
         # Default kinds are unique per project — update in place if present.
         doc = Document.objects.filter(project=project, kind=kind).first()
@@ -672,11 +728,14 @@ def _apply_document_change(project: Project, change: dict) -> str | None:
     return f"Updated document “{doc.title}”"
 
 
-def _apply_field_change(project: Project, change: dict) -> str | None:
+def _apply_field_change(project: Project, change: dict) -> tuple[str | None, str | None]:
+    """Apply one field change. Returns (human line, field name) — the field
+    name lets the caller know which diagrams to regenerate."""
+
     field = change.get("field")
     ok, value = chat.coerce_field(field, change.get("value"))
     if not ok:
-        return None
+        return None, None
     setattr(project, field, value)
     project.save()
-    return f"Updated field “{field}”"
+    return f"Updated field “{field}”", field

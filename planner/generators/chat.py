@@ -400,6 +400,12 @@ def _assistant_system_prompt(language_name: str, *, web_search: bool = False) ->
         "integrations, hosting, timeline, budget, risks (strings); features, "
         "nice_to_have, out_of_scope (string arrays); personas (array of "
         '{name,role,goal}); entities (array of {name,fields:[...]}).\n'
+        "- Diagrams (use case, ERD, user flow) are generated automatically and "
+        "deterministically from project fields. NEVER write or edit a diagram "
+        "document body or any Mermaid yourself. To change a diagram, propose a "
+        "FIELD change to its source data: use case = personas + features; ERD = "
+        "entities; user flow = features + success_metrics + name. The diagram "
+        "documents are regenerated for you.\n"
         "- IMPORTANT: never reply with only an acknowledgement like \"I'll "
         "rewrite the documents now\" and then stop. In the SAME message, after "
         "your short reply, include the complete proposal with the full document "
