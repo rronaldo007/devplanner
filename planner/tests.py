@@ -1520,6 +1520,83 @@ class AiBannerTests(TestCase):
 
 
 # ===========================================================================
+# Document categories
+# ===========================================================================
+class DocumentCategoryTests(TestCase):
+    def setUp(self):
+        self.user = _make_user()
+        self.client.force_login(self.user)
+
+    def test_category_for_kind_mapping(self):
+        self.assertEqual(
+            Document.category_for_kind(Document.KIND_BUSINESS_PLAN),
+            Document.CATEGORY_BUSINESS,
+        )
+        self.assertEqual(
+            Document.category_for_kind(Document.KIND_SPECIFICATIONS),
+            Document.CATEGORY_SYSTEM_DESIGN,
+        )
+        self.assertEqual(
+            Document.category_for_kind(Document.KIND_USE_CASE_DIAGRAM),
+            Document.CATEGORY_SYSTEM_DESIGN,
+        )
+        self.assertEqual(
+            Document.category_for_kind(Document.KIND_ERD_DIAGRAM),
+            Document.CATEGORY_DATA_DESIGN,
+        )
+        self.assertEqual(
+            Document.category_for_kind(Document.KIND_FLOW_DIAGRAM),
+            Document.CATEGORY_APP_DESIGN,
+        )
+        self.assertEqual(
+            Document.category_for_kind(Document.KIND_CUSTOM),
+            Document.CATEGORY_OTHER,
+        )
+
+    def test_save_normalises_builtin_category(self):
+        project = _make_project(self.user)
+        # Even if the wrong category is passed, built-in kinds are normalised.
+        doc = Document.objects.create(
+            project=project, kind=Document.KIND_BUSINESS_PLAN, title="BP",
+            category=Document.CATEGORY_OTHER,
+        )
+        self.assertEqual(doc.category, Document.CATEGORY_BUSINESS)
+
+    def test_custom_category_preserved(self):
+        project = _make_project(self.user)
+        doc = Document.objects.create(
+            project=project, kind=Document.KIND_CUSTOM, title="Arch",
+            category=Document.CATEGORY_SYSTEM_DESIGN,
+        )
+        self.assertEqual(doc.category, Document.CATEGORY_SYSTEM_DESIGN)
+        plain = Document.objects.create(
+            project=project, kind=Document.KIND_CUSTOM, title="X",
+        )
+        self.assertEqual(plain.category, Document.CATEGORY_OTHER)
+
+    def test_sync_default_documents_sets_categories(self):
+        project = _make_project(self.user)
+        sync_default_documents(project)
+        cats = {d.kind: d.category for d in project.documents.all()}
+        self.assertEqual(cats[Document.KIND_BUSINESS_PLAN], Document.CATEGORY_BUSINESS)
+        self.assertEqual(cats[Document.KIND_USE_CASE_DIAGRAM], Document.CATEGORY_SYSTEM_DESIGN)
+        self.assertEqual(cats[Document.KIND_ERD_DIAGRAM], Document.CATEGORY_DATA_DESIGN)
+        self.assertEqual(cats[Document.KIND_FLOW_DIAGRAM], Document.CATEGORY_APP_DESIGN)
+        self.assertEqual(cats[Document.KIND_USER_STORIES], Document.CATEGORY_APP_DESIGN)
+
+    def test_project_detail_groups_by_category_in_order(self):
+        project = _make_project(self.user)
+        sync_default_documents(project)
+        resp = self.client.get(reverse("planner:project_detail", args=[project.pk]))
+        self.assertEqual(resp.status_code, 200)
+        labels = [g["label"] for g in resp.context["category_groups"]]
+        # Display order, empty categories (System Modeling, Other) omitted.
+        self.assertEqual(labels, ["Business", "System Design", "Data Design", "App Design"])
+        self.assertContains(resp, "System Design")
+        self.assertContains(resp, "Data Design")
+
+
+# ===========================================================================
 # Password reset
 # ===========================================================================
 import re as _re  # noqa: E402

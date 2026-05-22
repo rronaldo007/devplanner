@@ -449,19 +449,25 @@ def project_detail(request, pk):
         # Unfinished chat — resume it instead of showing an empty folder.
         return HttpResponseRedirect(reverse("planner:project_chat", args=[project.pk]))
     docs = list(project.documents.all())
-    grouped = {
-        "planning": [d for d in docs if d.kind in (
-            Document.KIND_BUSINESS_PLAN,
-            Document.KIND_SPECIFICATIONS,
-            Document.KIND_USER_STORIES,
-        )],
-        "diagrams": [d for d in docs if d.kind in Document.DIAGRAM_KINDS],
-        "custom": [d for d in docs if d.kind == Document.KIND_CUSTOM],
-    }
+    # Group by category, preserving the display order from CATEGORY_CHOICES.
+    by_category = {value: [] for value, _ in Document.CATEGORY_CHOICES}
+    for d in docs:
+        by_category.setdefault(d.category, []).append(d)
+    category_groups = [
+        {"label": label, "docs": by_category.get(value, [])}
+        for value, label in Document.CATEGORY_CHOICES
+        if by_category.get(value)
+    ]
+    has_custom = any(d.kind == Document.KIND_CUSTOM for d in docs)
     return render(
         request,
         "planner/dashboard/project_detail.html",
-        {"project": project, "groups": grouped, "doc_count": len(docs)},
+        {
+            "project": project,
+            "category_groups": category_groups,
+            "doc_count": len(docs),
+            "has_custom": has_custom,
+        },
     )
 
 

@@ -104,8 +104,8 @@ class ProjectAdmin(ModelAdmin):
 
 @admin.register(Document)
 class DocumentAdmin(ModelAdmin):
-    list_display = ("title", "project", "kind", "is_generated", "updated_at")
-    list_filter = ("kind", "is_generated")
+    list_display = ("title", "project", "kind", "category", "is_generated", "updated_at")
+    list_filter = ("category", "kind", "is_generated")
     list_filter_submit = True
     search_fields = ("title", "project__name")
     list_select_related = ("project",)

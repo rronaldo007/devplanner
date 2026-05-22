@@ -165,10 +165,48 @@ class Document(models.Model):
         KIND_FLOW_DIAGRAM,
     )
 
+    # --- Category: a coarse grouping for the project's "spec pack" ----------
+    CATEGORY_BUSINESS = "business"
+    CATEGORY_SYSTEM_DESIGN = "system_design"
+    CATEGORY_SYSTEM_MODELING = "system_modeling"
+    CATEGORY_DATA_DESIGN = "data_design"
+    CATEGORY_APP_DESIGN = "app_design"
+    CATEGORY_OTHER = "other"
+
+    # Display order drives the project page sections.
+    CATEGORY_CHOICES = [
+        (CATEGORY_BUSINESS, "Business"),
+        (CATEGORY_SYSTEM_DESIGN, "System Design"),
+        (CATEGORY_SYSTEM_MODELING, "System Modeling"),
+        (CATEGORY_DATA_DESIGN, "Data Design"),
+        (CATEGORY_APP_DESIGN, "App Design"),
+        (CATEGORY_OTHER, "Other"),
+    ]
+
+    # Canonical category for each built-in kind. Custom docs default to OTHER
+    # (and may be set explicitly).
+    _KIND_CATEGORY = {
+        KIND_BUSINESS_PLAN: CATEGORY_BUSINESS,
+        KIND_SPECIFICATIONS: CATEGORY_SYSTEM_DESIGN,
+        KIND_USER_STORIES: CATEGORY_APP_DESIGN,
+        KIND_USE_CASE_DIAGRAM: CATEGORY_SYSTEM_DESIGN,
+        KIND_ERD_DIAGRAM: CATEGORY_DATA_DESIGN,
+        KIND_FLOW_DIAGRAM: CATEGORY_APP_DESIGN,
+    }
+
+    @classmethod
+    def category_for_kind(cls, kind: str) -> str:
+        return cls._KIND_CATEGORY.get(kind, cls.CATEGORY_OTHER)
+
     project = models.ForeignKey(
         Project, on_delete=models.CASCADE, related_name="documents",
     )
     kind = models.CharField(max_length=32, choices=KIND_CHOICES, default=KIND_CUSTOM)
+    category = models.CharField(
+        max_length=20, choices=CATEGORY_CHOICES, default=CATEGORY_OTHER,
+        help_text="Coarse grouping on the project page. Auto-set from kind for "
+                  "built-in documents; editable for custom ones.",
+    )
     title = models.CharField(max_length=200)
     body = models.TextField(blank=True)
     is_generated = models.BooleanField(
@@ -183,6 +221,13 @@ class Document(models.Model):
 
     class Meta:
         ordering = ["kind", "created_at"]
+
+    def save(self, *args, **kwargs):
+        # Built-in kinds have a canonical category; custom docs keep whatever
+        # category they were given (default OTHER).
+        if self.kind != self.KIND_CUSTOM:
+            self.category = self.category_for_kind(self.kind)
+        super().save(*args, **kwargs)
 
     def __str__(self) -> str:
         return f"{self.title} ({self.get_kind_display()})"
