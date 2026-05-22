@@ -2108,3 +2108,90 @@ class SettingsApiKeyTests(TestCase):
         self.assertEqual(resp.status_code, 302)
         self.user.profile.refresh_from_db()
         self.assertEqual(self.user.profile.anthropic_api_key, "sk-ant-new")
+
+
+class ChatMessagePhaseConversationConstraintTests(TestCase):
+    """The DB constraint coupling phase and conversation nullability."""
+
+    def setUp(self):
+        self.user = _make_user()
+        self.project = _make_project(self.user)
+
+    def test_assistant_message_without_conversation_rejected(self):
+        from django.db import IntegrityError, transaction
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                ChatMessage.objects.create(
+                    project=self.project, phase=ChatMessage.PHASE_ASSISTANT,
+                    role=ChatMessage.ROLE_ASSISTANT, content="x", conversation=None,
+                )
+
+    def test_intake_message_with_conversation_rejected(self):
+        from django.db import IntegrityError, transaction
+        conv = self.project.conversations.create(title="c")
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                ChatMessage.objects.create(
+                    project=self.project, phase=ChatMessage.PHASE_INTAKE,
+                    role=ChatMessage.ROLE_USER, content="x", conversation=conv,
+                )
+
+    def test_valid_combinations_allowed(self):
+        conv = self.project.conversations.create(title="c")
+        # assistant + conversation OK; intake + no conversation OK
+        ChatMessage.objects.create(
+            project=self.project, phase=ChatMessage.PHASE_ASSISTANT,
+            role=ChatMessage.ROLE_ASSISTANT, content="a", conversation=conv,
+        )
+        ChatMessage.objects.create(
+            project=self.project, phase=ChatMessage.PHASE_INTAKE,
+            role=ChatMessage.ROLE_USER, content="b",
+        )
+        self.assertEqual(self.project.chat_messages.count(), 2)
+
+
+# ===========================================================================
+# AI banner on the generation paths (project creation + regenerate)
+# ===========================================================================
+class GenerationBannerTests(TestCase):
+    def setUp(self):
+        self.user = _make_user(api_key="user-sk-test")
+        self.client.force_login(self.user)
+        self._orig = sys.modules.get("anthropic")
+
+    def tearDown(self):
+        if self._orig is None:
+            sys.modules.pop("anthropic", None)
+        else:
+            sys.modules["anthropic"] = self._orig
+
+    def test_project_new_records_ai_status_on_credit_error(self):
+        _install_anthropic_credit_error()
+        resp = self.client.post(reverse("planner:project_new"), {
+            "name": "Acme", "language": "en",
+            "problem": "p", "solution": "s", "target_users": "t",
+        })
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(self.client.session.get("ai_status"), "credits")
+
+    def test_default_doc_regenerate_records_status_and_warns(self):
+        project = _make_project(self.user)
+        sync_default_documents(project, force_engine="templates")  # seed docs cheaply
+        doc = project.documents.get(kind=Document.KIND_BUSINESS_PLAN)
+        _install_anthropic_credit_error()
+        resp = self.client.post(
+            reverse("planner:document_regenerate", args=[project.pk, doc.pk])
+        )
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(self.client.session.get("ai_status"), "credits")
+
+    def test_diagram_regenerate_is_deterministic_no_status(self):
+        project = _make_project(self.user)
+        sync_default_documents(project, force_engine="templates")
+        doc = project.documents.get(kind=Document.KIND_ERD_DIAGRAM)
+        _install_anthropic_credit_error()  # would error IF it called the API
+        resp = self.client.post(
+            reverse("planner:document_regenerate", args=[project.pk, doc.pk])
+        )
+        self.assertEqual(resp.status_code, 302)
+        self.assertIsNone(self.client.session.get("ai_status"))  # diagrams don't use AI
