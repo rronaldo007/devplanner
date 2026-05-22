@@ -69,12 +69,15 @@ fi
 # Dev defaults: debug on unless the env already says otherwise.
 export DJANGO_DEBUG="${DJANGO_DEBUG:-true}"
 
-# Optional: MAILPIT=1 starts a local Mailpit mail catcher and routes emails to
-# it (web inbox at http://localhost:8025) instead of the console.
-if [ "${MAILPIT:-}" = "1" ] || [ "${MAILPIT:-}" = "true" ]; then
-    "$ROOT/scripts/mailpit.sh" start || true
-    export DJANGO_DEV_SMTP="${DJANGO_DEV_SMTP:-localhost:1025}"
-    echo "[start] emails -> Mailpit inbox at http://localhost:8025"
+# Email catcher: when Docker is available, start Mailpit and route emails to its
+# web inbox (http://localhost:8025) instead of the console. Default on; disable
+# with MAILPIT=0. Honour an explicit DJANGO_DEV_SMTP if the user set one.
+if [ "${MAILPIT:-1}" != "0" ] && [ "${MAILPIT:-1}" != "false" ] \
+        && command -v docker >/dev/null 2>&1; then
+    if "$ROOT/scripts/mailpit.sh" start; then
+        export DJANGO_DEV_SMTP="${DJANGO_DEV_SMTP:-localhost:1025}"
+        echo "[start] emails -> Mailpit inbox at http://localhost:8025"
+    fi
 fi
 
 # 4. Migrations
