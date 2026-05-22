@@ -88,8 +88,8 @@ You can provide an API key in one of two ways:
 
 ```bash
 export ANTHROPIC_API_KEY=sk-ant-...
-# optional: override the model (defaults to claude-opus-4-7)
-export ANTHROPIC_MODEL=claude-opus-4-7
+# optional: override the model (defaults to claude-sonnet-4-6)
+export ANTHROPIC_MODEL=claude-sonnet-4-6
 python manage.py runserver
 ```
 
@@ -162,7 +162,7 @@ HTTP flow including ownership isolation.
 | `DJANGO_HSTS_SECONDS` | `0` | Enable HSTS in production by setting this to e.g. `31536000`. |
 | `DJANGO_SECURE_COOKIES` | `true` when DEBUG=false | Set to `false` if you are not yet on HTTPS. |
 | `ANTHROPIC_API_KEY` | empty | Global Claude key (per-user keys configured in Settings always win). |
-| `ANTHROPIC_MODEL` | `claude-opus-4-7` | Override Claude model. |
+| `ANTHROPIC_MODEL` | `claude-sonnet-4-6` | Override Claude model. |
 | `ANTHROPIC_MAX_TOKENS` | `4000` | Max tokens for document-generation responses. |
 | `ANTHROPIC_INTAKE_MAX_TOKENS` | `2000` | Max tokens per chat-intake turn (short Q&A). |
 

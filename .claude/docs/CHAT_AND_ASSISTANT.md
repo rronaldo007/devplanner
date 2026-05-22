@@ -90,9 +90,10 @@ with an **Apply** and **Discard** button. **Nothing is saved until you click App
 - The system prompt **forbids deferring work** ("I'll do it now" then stopping) — the
   full proposal must come in the same turn.
 - The assistant turn is **streamed** with `ANTHROPIC_ASSISTANT_MAX_TOKENS`
-  (default 128000 — opus-4-7's max output ceiling), so multi-document rewrites
-  finish in one request. While this runs, the chat keeps showing its **"Thinking…"**
-  loading state. (No prefill-continuation: opus-4-7 rejects assistant-message prefill.)
+  (default 64000 — the default Sonnet 4.6 model's max output; raise to 128000 if you
+  switch to an Opus model), so multi-document rewrites finish in one request. While
+  this runs, the chat keeps showing its **"Thinking…"** loading state. (No
+  prefill-continuation: 4.x models reject assistant-message prefill.)
 - If a turn still hits the token limit (`max_tokens`) without a complete proposal, the
   reply ends with an honest note ("That response was too long to finish — ask me to
   change one document at a time").
@@ -137,10 +138,10 @@ stacks), never the user's private details.
 | Variable | Default | Effect |
 |----------|---------|--------|
 | `ANTHROPIC_API_KEY` | — | Fallback key when a user has none in their profile |
-| `ANTHROPIC_MODEL` | `claude-opus-4-7` | Model for all chat/generation calls (defined once in `generators/claude.py`) |
+| `ANTHROPIC_MODEL` | `claude-sonnet-4-6` | Model for all chat/generation calls (defined once in `generators/claude.py`) |
 | `ANTHROPIC_INTAKE_MAX_TOKENS` | `2000` | Max tokens per intake turn (short Q&A) |
 | `ANTHROPIC_MAX_TOKENS` | `16000` | Max tokens for document-generation responses (non-streaming; ~16k is the safe ceiling) |
-| `ANTHROPIC_ASSISTANT_MAX_TOKENS` | `128000` | Max tokens per assistant turn (opus-4-7's output ceiling). The turn is streamed, so this is safe. |
+| `ANTHROPIC_ASSISTANT_MAX_TOKENS` | `64000` | Max tokens per assistant turn (Sonnet 4.6's output ceiling; use 128000 for Opus). The turn is streamed, so this is safe. |
 | `ANTHROPIC_WEB_SEARCH` | `1` (on) | Enable server-side web search (`0`/`false`/`off` to disable) |
 | `ANTHROPIC_WEB_SEARCH_MAX_USES` | `5` | Max searches per turn |
 
