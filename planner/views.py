@@ -56,6 +56,20 @@ def _clear_ai_status(request) -> None:
         request.session.save()
 
 
+def _sync_ai_status(request, claude_error: str) -> None:
+    """Record a banner-worthy failure when AI degraded, else clear the flag.
+
+    ``claude_error`` is the ``_claude_error`` field returned by the generators
+    (non-empty only when generation fell all the way back to templates).
+    """
+
+    if claude_error:
+        category, _ = errors.classify(claude_error)
+        _record_ai_status(request, category)
+    else:
+        _clear_ai_status(request)
+
+
 # ===========================================================================
 # Public
 # ===========================================================================
@@ -118,7 +132,8 @@ def project_new(request):
             project = form.save(commit=False)
             project.owner = request.user
             project.save()
-            generators.sync_default_documents(project)
+            output = generators.sync_default_documents(project)
+            _sync_ai_status(request, output.get("_claude_error", ""))
             messages.success(
                 request,
                 f"Project '{project.name}' created and {len(Document.DEFAULT_KINDS)} "
@@ -277,7 +292,8 @@ def project_chat_message(request, pk):
         setattr(project, field, value)
     project.is_draft = False
     project.save()
-    generators.sync_default_documents(project)
+    output = generators.sync_default_documents(project)
+    _sync_ai_status(request, output.get("_claude_error", ""))
 
     messages.success(
         request,
@@ -597,10 +613,15 @@ def document_edit(request, pk, doc_pk):
 def document_regenerate(request, pk, doc_pk):
     project = _owned_project(request, pk)
     document = get_object_or_404(Document, pk=doc_pk, project=project)
-    document.body = generators.regenerate(document)
+    result = generators.regenerate(document)
+    document.body = result["body"]
     document.is_generated = True
     document.save()
-    messages.success(request, f"'{document.title}' regenerated.")
+    _sync_ai_status(request, result.get("_claude_error", ""))
+    if result.get("_claude_error"):
+        messages.warning(request, f"'{document.title}' regenerated from a template — AI is unavailable.")
+    else:
+        messages.success(request, f"'{document.title}' regenerated.")
     return HttpResponseRedirect(
         reverse("planner:document_detail", args=[project.pk, document.pk])
     )
@@ -876,7 +897,7 @@ def _regenerate_diagrams(project: Project, kinds) -> list[str]:
 
     lines: list[str] = []
     for doc in project.documents.filter(kind__in=set(kinds)):
-        doc.body = generators.regenerate(doc)
+        doc.body = generators.regenerate(doc)["body"]
         doc.is_generated = True
         doc.save(update_fields=["body", "is_generated", "updated_at"])
         lines.append(f"Regenerated diagram “{doc.title}”")
@@ -944,7 +965,7 @@ def _apply_document_change(project: Project, change: dict) -> str | None:
             doc = Document.objects.filter(project=project, kind=target_kind).first()
         if doc is None:
             return None
-        doc.body = generators.regenerate(doc)
+        doc.body = generators.regenerate(doc)["body"]
         doc.is_generated = True
         doc.save(update_fields=["body", "is_generated", "updated_at"])
         return f"Regenerated diagram “{doc.title}” from project fields"
