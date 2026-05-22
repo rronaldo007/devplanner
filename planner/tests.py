@@ -554,6 +554,7 @@ class DashboardFlowTests(TestCase):
         resp = self.client.post(reverse("planner:settings"), {
             "anthropic_api_key": "sk-test",
             "default_language": "fr",
+            "ai_provider": "claude",
         })
         self.assertRedirects(resp, reverse("planner:settings"))
         self.user.profile.refresh_from_db()
@@ -2098,15 +2099,18 @@ class SettingsApiKeyTests(TestCase):
         self.assertNotContains(resp, "sk-ant-secret")
 
     def test_blank_submit_keeps_existing_key(self):
-        resp = self.client.post(self.url, {"anthropic_api_key": "", "default_language": "en"})
+        resp = self.client.post(self.url, {
+            "anthropic_api_key": "", "default_language": "en", "ai_provider": "claude",
+        })
         self.assertEqual(resp.status_code, 302)
         self.user.profile.refresh_from_db()
         self.assertEqual(self.user.profile.anthropic_api_key, "sk-ant-secret")
 
     def test_new_key_replaces_existing(self):
-        resp = self.client.post(
-            self.url, {"anthropic_api_key": "sk-ant-new", "default_language": "en"}
-        )
+        resp = self.client.post(self.url, {
+            "anthropic_api_key": "sk-ant-new", "default_language": "en",
+            "ai_provider": "claude",
+        })
         self.assertEqual(resp.status_code, 302)
         self.user.profile.refresh_from_db()
         self.assertEqual(self.user.profile.anthropic_api_key, "sk-ant-new")
@@ -2420,3 +2424,59 @@ class SavePreviousAndClassifyTests(TestCase):
             })
         doc = project.documents.get(title="Database Schema")
         self.assertEqual(doc.category, Document.CATEGORY_DATA_DESIGN)
+
+
+# ===========================================================================
+# Per-user "generate with local" preference
+# ===========================================================================
+class GenerateWithLocalTests(TestCase):
+    def setUp(self):
+        from .generators import engine
+        self.engine = engine
+
+    def _project_with_pref(self, provider, oss_model=""):
+        user = _make_user(api_key="sk-claude")  # Claude available
+        user.profile.ai_provider = provider
+        user.profile.oss_model = oss_model
+        user.profile.save()
+        return _make_project(user)
+
+    def test_default_claude_first(self):
+        project = self._project_with_pref("claude")
+        with mock.patch.dict(os.environ, _OSS_ENV):  # OSS also configured
+            tiers = self.engine._ai_tiers(project)
+        self.assertEqual(tiers, ["claude", "oss"])
+
+    def test_oss_preference_puts_oss_first(self):
+        project = self._project_with_pref("oss")
+        with mock.patch.dict(os.environ, _OSS_ENV):
+            tiers = self.engine._ai_tiers(project)
+        self.assertEqual(tiers, ["oss", "claude"])  # local first, Claude fallback
+
+    def test_oss_preference_with_per_user_model_no_env_model(self):
+        # User picked a model; server has the endpoint (OLLAMA_HOST) but no OSS_MODEL.
+        project = self._project_with_pref("oss", oss_model="gemma4:26b")
+        env = {"OSS_BASE_URL": "", "OSS_MODEL": "", "OLLAMA_HOST": "http://shadow:11434"}
+        with mock.patch.dict(os.environ, env):
+            self.assertTrue(self.engine._oss_generation_ready(project))
+            self.assertEqual(self.engine._oss_kwargs(project)["model"], "gemma4:26b")
+            self.assertEqual(self.engine._ai_tiers(project)[0], "oss")
+
+    def test_oss_preference_falls_back_to_claude_when_local_unconfigured(self):
+        project = self._project_with_pref("oss")  # no oss_model
+        env = {"OSS_BASE_URL": "", "OSS_MODEL": "", "OLLAMA_HOST": ""}
+        with mock.patch.dict(os.environ, env):
+            tiers = self.engine._ai_tiers(project)
+        self.assertEqual(tiers, ["claude"])  # local not ready → Claude
+
+    def test_settings_form_saves_provider_and_model(self):
+        user = _make_user(api_key="")
+        self.client.force_login(user)
+        resp = self.client.post(reverse("planner:settings"), {
+            "default_language": "en", "anthropic_api_key": "",
+            "ai_provider": "oss", "oss_model": "gemma4:26b",
+        })
+        self.assertEqual(resp.status_code, 302)
+        user.profile.refresh_from_db()
+        self.assertEqual(user.profile.ai_provider, "oss")
+        self.assertEqual(user.profile.oss_model, "gemma4:26b")

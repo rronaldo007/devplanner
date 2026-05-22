@@ -906,7 +906,7 @@ def settings_view(request):
     return render(
         request,
         "planner/dashboard/settings.html",
-        {"form": form, "profile": profile},
+        {"form": form, "profile": profile, "oss_models": chat.available_models()["oss"]},
     )
 
 
