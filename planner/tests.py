@@ -2385,3 +2385,38 @@ class InlineDocWrapTests(TestCase):
             self.DOC, "en", False, user_request="generate a file",
         )
         self.assertEqual(res["proposals"], [])
+
+
+class SavePreviousAndClassifyTests(TestCase):
+    """OSS 'save the previous output' capture + auto-classify on apply."""
+
+    def test_is_save_previous_request(self):
+        self.assertTrue(chat_mod._is_save_previous_request("generate a file for the work you just did"))
+        self.assertTrue(chat_mod._is_save_previous_request("save this as a document"))
+        self.assertTrue(chat_mod._is_save_previous_request("create a file for the diagram you made"))
+        self.assertFalse(chat_mod._is_save_previous_request("write a brand new security plan"))
+
+    def test_save_previous_captures_prior_assistant_message(self):
+        # No openai stub needed — this path must NOT call the model.
+        prev = "# Class Diagram\n\n" + ("Some UML detail line.\n" * 30)
+        history = [
+            {"role": "user", "content": "make a class diagram"},
+            {"role": "assistant", "content": prev},
+            {"role": "user", "content": "generate a file for the work you just did"},
+        ]
+        res = chat_mod.assistant_turn(history, "ctx", provider="oss", model="x")
+        self.assertEqual(len(res["proposals"]), 1)
+        self.assertEqual(res["proposals"][0]["title"], "Class Diagram")
+        self.assertIn("Some UML detail", res["proposals"][0]["body"])
+
+    def test_applied_custom_doc_is_classified(self):
+        from planner.views import _apply_document_change
+        user = _make_user(api_key="")  # keyword classifier, no network
+        project = _make_project(user)
+        with mock.patch.dict(os.environ, {"OSS_MODEL": "", "OSS_BASE_URL": "", "OLLAMA_HOST": ""}):
+            _apply_document_change(project, {
+                "type": "document", "kind": "custom", "title": "Database Schema",
+                "body": "Tables, foreign keys, indexes and migrations for the data model.",
+            })
+        doc = project.documents.get(title="Database Schema")
+        self.assertEqual(doc.category, Document.CATEGORY_DATA_DESIGN)

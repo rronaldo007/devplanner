@@ -518,6 +518,25 @@ def _assistant_turn_oss(
     strict ``===PROPOSAL===`` JSON, but if one is emitted it parses the same way.
     """
 
+    last_user = next(
+        (m["content"] for m in reversed(messages) if m["role"] == "user"), ""
+    )
+    # "Save / generate a file for the work you just did / this / the above":
+    # capture the PREVIOUS assistant message verbatim instead of asking the
+    # model to reproduce it (small models drift and write something unrelated).
+    if _is_save_previous_request(last_user):
+        prev = next(
+            (m["content"] for m in reversed(messages) if m["role"] == "assistant"), ""
+        )
+        wrapped = _wrap_inline_doc(prev, from_heading=False) if prev else None
+        if wrapped:
+            return {
+                "reply": "I've saved your previous output as a document — review "
+                         "and apply it below.",
+                "proposals": [wrapped],
+                "summary": f"Add “{wrapped['title']}”",
+            }
+
     from openai import OpenAI
 
     from . import oss
@@ -538,9 +557,6 @@ def _assistant_turn_oss(
     choice = response.choices[0]
     text = (choice.message.content or "").strip()
     truncated = getattr(choice, "finish_reason", None) == "length"
-    last_user = next(
-        (m["content"] for m in reversed(messages) if m["role"] == "user"), ""
-    )
     # Lenient parsing: smaller models often drop the marker or wrap the JSON in
     # a code fence — accept those rather than losing the change.
     return _finish_assistant_turn(
@@ -692,20 +708,44 @@ def _is_file_request(user_request: str) -> bool:
     return bool(user_request and _FILE_REQUEST_RE.search(user_request))
 
 
-def _wrap_inline_doc(text: str) -> dict | None:
-    """Wrap an inline markdown document (no proposal) as a custom-document change.
+_SAVE_PREVIOUS_RE = re.compile(
+    r"\b(save|generate|create|make|export|turn|store)\b.{0,60}"
+    r"(this|that|\bit\b|the above|above|previous|the work you just|"
+    r"you just (did|made|wrote|created|generated)|the (document|diagram|content|file) you)",
+    re.IGNORECASE | re.DOTALL,
+)
 
-    Returns ``None`` unless the reply contains a substantial markdown document
-    (a top-level heading + enough body), so ordinary chat answers aren't wrapped.
+
+def _is_save_previous_request(user_request: str) -> bool:
+    """Heuristic: did the user ask to save the PREVIOUS assistant output?"""
+
+    return bool(user_request and _SAVE_PREVIOUS_RE.search(user_request))
+
+
+def _wrap_inline_doc(
+    text: str, *, from_heading: bool = True, default_title: str = "Saved from chat",
+) -> dict | None:
+    """Wrap markdown text as a custom-document change.
+
+    ``from_heading`` (default) takes the body from the first heading onward and
+    titles it from that heading — used to extract a doc the model wrote inline,
+    dropping any lead-in prose; returns ``None`` if there's no heading. When
+    ``from_heading`` is False the whole ``text`` is the body (used for
+    "save the previous message" verbatim). Returns ``None`` if too short.
     """
 
-    match = re.search(r"^#{1,2} +(.+)$", text, flags=re.MULTILINE)
-    if not match:
-        return None
-    body = text[match.start():].strip()
+    match = re.search(r"^#{1,3} +(.+)$", text, flags=re.MULTILINE)
+    if from_heading:
+        if not match:
+            return None
+        body = text[match.start():].strip()
+    else:
+        body = text.strip()
     if len(body) < 200:  # too short to be a real document
         return None
-    title = match.group(1).strip().lstrip("#").strip()[:200] or "Untitled document"
+    title = (
+        match.group(1).strip().lstrip("#").strip()[:200] if match else default_title
+    ) or default_title
     return {
         "type": "document",
         "kind": "custom",
