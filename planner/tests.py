@@ -2079,3 +2079,50 @@ class ConversationTests(TestCase):
         titles = [c.title for c in resp.context["conversations"]]
         self.assertIn("Mine", titles)
         self.assertNotIn("Theirs", titles)
+
+
+# ===========================================================================
+# AI banner on the generation paths (project creation + regenerate)
+# ===========================================================================
+class GenerationBannerTests(TestCase):
+    def setUp(self):
+        self.user = _make_user(api_key="user-sk-test")
+        self.client.force_login(self.user)
+        self._orig = sys.modules.get("anthropic")
+
+    def tearDown(self):
+        if self._orig is None:
+            sys.modules.pop("anthropic", None)
+        else:
+            sys.modules["anthropic"] = self._orig
+
+    def test_project_new_records_ai_status_on_credit_error(self):
+        _install_anthropic_credit_error()
+        resp = self.client.post(reverse("planner:project_new"), {
+            "name": "Acme", "language": "en",
+            "problem": "p", "solution": "s", "target_users": "t",
+        })
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(self.client.session.get("ai_status"), "credits")
+
+    def test_default_doc_regenerate_records_status_and_warns(self):
+        project = _make_project(self.user)
+        sync_default_documents(project, force_engine="templates")  # seed docs cheaply
+        doc = project.documents.get(kind=Document.KIND_BUSINESS_PLAN)
+        _install_anthropic_credit_error()
+        resp = self.client.post(
+            reverse("planner:document_regenerate", args=[project.pk, doc.pk])
+        )
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(self.client.session.get("ai_status"), "credits")
+
+    def test_diagram_regenerate_is_deterministic_no_status(self):
+        project = _make_project(self.user)
+        sync_default_documents(project, force_engine="templates")
+        doc = project.documents.get(kind=Document.KIND_ERD_DIAGRAM)
+        _install_anthropic_credit_error()  # would error IF it called the API
+        resp = self.client.post(
+            reverse("planner:document_regenerate", args=[project.pk, doc.pk])
+        )
+        self.assertEqual(resp.status_code, 302)
+        self.assertIsNone(self.client.session.get("ai_status"))  # diagrams don't use AI
