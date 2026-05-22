@@ -1848,3 +1848,124 @@ class ClassifyViewTests(TestCase):
             title="X", body="y", category=Document.CATEGORY_OTHER,
         )
         self.assertContains(self.client.get(url), "Classify all")
+
+
+# ===========================================================================
+# OSS / OpenAI-compatible fallback engine (stubbed openai module)
+# ===========================================================================
+def _install_openai_stub(response_text: str, *, raises: bool = False):
+    """Install a stub ``openai`` module whose chat completion returns text."""
+
+    class _Completions:
+        def __init__(self, text):
+            self._text = text
+            self.calls = []
+
+        def create(self, **kwargs):
+            self.calls.append(kwargs)
+            if raises:
+                raise RuntimeError("oss-boom")
+            msg = types.SimpleNamespace(content=self._text)
+            return types.SimpleNamespace(choices=[types.SimpleNamespace(message=msg)])
+
+    class _OpenAI:
+        def __init__(self, *args, base_url=None, api_key=None, **kwargs):
+            self.base_url = base_url
+            self.api_key = api_key
+            self.chat = types.SimpleNamespace(completions=_Completions(response_text))
+
+    module = types.ModuleType("openai")
+    module.OpenAI = _OpenAI
+    sys.modules["openai"] = module
+    return module
+
+
+_OSS_ENV = {
+    "OSS_BASE_URL": "http://shadow-pc:11434/v1",
+    "OSS_MODEL": "llama3.1",
+    "OSS_API_KEY": "ollama",
+}
+_DOC_MARKERS = (
+    "===BUSINESS_PLAN===\n# BP\nBody.\n"
+    "===SPECIFICATIONS===\n# Specs\nBody.\n"
+    "===USER_STORIES===\n# Stories\nBody."
+)
+
+
+class OssEngineTests(TestCase):
+    def setUp(self):
+        self._orig_anthropic = sys.modules.get("anthropic")
+        self._orig_openai = sys.modules.get("openai")
+        self._env = mock.patch.dict(os.environ, _OSS_ENV)
+        self._env.start()
+
+    def tearDown(self):
+        self._env.stop()
+        for name, orig in (("anthropic", self._orig_anthropic), ("openai", self._orig_openai)):
+            if orig is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = orig
+
+    def test_is_configured_reads_env(self):
+        from .generators import oss
+        self.assertTrue(oss.is_configured())
+        with mock.patch.dict(os.environ, {"OSS_BASE_URL": "", "OSS_MODEL": ""}):
+            self.assertFalse(oss.is_configured())
+
+    def test_generate_all_uses_oss_when_no_claude_key(self):
+        _install_openai_stub(_DOC_MARKERS)
+        project = _make_project(_make_user(api_key=""))  # no Claude
+        out = generate_all(project)
+        self.assertEqual(out["engine"], "oss")
+        self.assertIn("BP", out["business_plan"])
+        self.assertEqual(out["_claude_error"], "")
+
+    def test_claude_failure_falls_back_to_oss(self):
+        # Claude key present but the call raises; OSS rescues it.
+        class _Boom:
+            def __init__(self, *a, **kw): pass
+            class _M:
+                def create(self, **kw): raise RuntimeError("claude-down")
+            messages = _M()
+        anth = types.ModuleType("anthropic")
+        anth.Anthropic = _Boom
+        sys.modules["anthropic"] = anth
+        _install_openai_stub(_DOC_MARKERS)
+
+        project = _make_project(_make_user(api_key="sk-claude"))
+        out = generate_all(project)
+        self.assertEqual(out["engine"], "oss")
+        self.assertEqual(out["_claude_error"], "")  # AI succeeded -> no banner
+
+    def test_oss_failure_falls_back_to_templates(self):
+        _install_openai_stub("", raises=True)
+        project = _make_project(_make_user(api_key=""))
+        out = generate_all(project)
+        self.assertEqual(out["engine"], "templates")
+        self.assertIn("oss-boom", out["_claude_error"])
+        self.assertIn("Acme Tasks", out["business_plan"])
+
+    def test_generate_custom_via_oss(self):
+        _install_openai_stub("Some OSS content.")
+        project = _make_project(_make_user(api_key=""))
+        result = generate_custom(project, "Architecture", "describe it")
+        self.assertEqual(result["engine"], "oss")
+        self.assertIn("Architecture", result["body"])
+        self.assertIn("Some OSS content", result["body"])
+
+    def test_classify_via_oss(self):
+        _install_openai_stub("data_design")
+        from .generators import classify_document
+        project = _make_project(_make_user(api_key=""))
+        out = classify_document(project, title="anything", body="anything")
+        self.assertEqual(out["engine"], "oss")
+        self.assertEqual(out["category"], Document.CATEGORY_DATA_DESIGN)
+
+    def test_classify_oss_invalid_slug_falls_back_to_keyword(self):
+        _install_openai_stub("not_a_category")
+        from .generators import classify_document
+        project = _make_project(_make_user(api_key=""))
+        out = classify_document(project, title="Pricing and revenue", body="market KPIs")
+        self.assertEqual(out["engine"], "keyword")
+        self.assertEqual(out["category"], Document.CATEGORY_BUSINESS)
