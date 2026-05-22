@@ -1,0 +1,56 @@
+{% extends "planner/_base_dashboard.html" %}
+{% load planner_extras %}
+{% block title %}{% if mode == "new" %}New project{% else %}Edit {{ project.name }}{% endif %} · DevPlanner{% endblock %}
+
+{% block content %}
+<div class="flex items-center justify-between">
+  <h1 class="text-2xl font-bold text-white">
+    {% if mode == "new" %}New project interview{% else %}Edit interview · {{ project.name }}{% endif %}
+  </h1>
+  {% if mode == "edit" %}
+    <a href="{% url 'planner:project_detail' project.pk %}" class="text-sm text-slate-300 hover:text-white">← back to project</a>
+  {% else %}
+    <a href="{% url 'planner:project_new_chat' %}" class="text-sm text-indigo-300 hover:text-indigo-200">💬 Prefer a guided chat?</a>
+  {% endif %}
+</div>
+<p class="mt-2 text-sm text-slate-400 max-w-2xl">
+  Answer what you can. Empty answers become “—” in the generated documents.
+  List-style answers (features, personas, entities) accept one item per line.
+  When you submit, DevPlanner generates a business plan, cahier des charges,
+  user stories and three Mermaid diagrams inside this project folder.
+</p>
+
+<form method="post" class="mt-6 space-y-5">
+  {% csrf_token %}
+  {% if form.non_field_errors %}
+    <div class="rounded-md border border-red-700 bg-red-900/30 px-3 py-2 text-sm text-red-200">{{ form.non_field_errors }}</div>
+  {% endif %}
+
+  {% for section_title, field_names in form.fieldsets %}
+    <fieldset class="rounded-xl border border-slate-800 bg-slate-900/40 p-5">
+      <legend class="px-2 text-sm font-semibold uppercase tracking-wide text-indigo-300">{{ section_title }}</legend>
+      <div class="space-y-4">
+        {% for field_name in field_names %}
+          {% with field=form|getfield:field_name %}
+            <div class="field">
+              <label for="{{ field.id_for_label }}">{{ field.label }}</label>
+              {{ field }}
+              {% if field.help_text %}<p class="hint">{{ field.help_text }}</p>{% endif %}
+              {% if field.errors %}<div class="errors">{{ field.errors }}</div>{% endif %}
+            </div>
+          {% endwith %}
+        {% endfor %}
+      </div>
+    </fieldset>
+  {% endfor %}
+
+  <div class="flex items-center gap-3">
+    <button type="submit" class="inline-flex items-center rounded-md bg-indigo-600 px-5 py-2.5 font-semibold text-white hover:bg-indigo-500">
+      {% if mode == "new" %}Generate documents{% else %}Save changes{% endif %}
+    </button>
+    {% if mode == "edit" %}
+      <a href="{% url 'planner:project_detail' project.pk %}" class="text-sm text-slate-300 hover:text-white">Cancel</a>
+    {% endif %}
+  </div>
+</form>
+{% endblock %}

@@ -1,0 +1,33 @@
+{% extends "planner/_base_public.html" %}
+{% block title %}Sign up · DevPlanner{% endblock %}
+
+{% block content %}
+<section class="max-w-md mx-auto px-6 py-16">
+  <h1 class="text-2xl font-bold text-white">Create your account</h1>
+  <p class="mt-2 text-sm text-slate-400">
+    Already have one? <a href="{% url 'planner:login' %}" class="text-indigo-400 hover:underline">Log in</a>.
+  </p>
+
+  <form method="post" class="mt-6 space-y-4">
+    {% csrf_token %}
+    {% if form.non_field_errors %}
+      <div class="rounded-md border border-red-700 bg-red-900/30 px-3 py-2 text-sm text-red-200">
+        {{ form.non_field_errors }}
+      </div>
+    {% endif %}
+
+    {% for field in form %}
+      <div class="field">
+        <label for="{{ field.id_for_label }}">{{ field.label }}</label>
+        {{ field }}
+        {% if field.help_text %}<p class="hint">{{ field.help_text|safe }}</p>{% endif %}
+        {% if field.errors %}<div class="errors">{{ field.errors }}</div>{% endif %}
+      </div>
+    {% endfor %}
+
+    <button type="submit" class="w-full inline-flex justify-center items-center rounded-md bg-indigo-600 px-4 py-2.5 font-semibold text-white hover:bg-indigo-500">
+      Sign up
+    </button>
+  </form>
+</section>
+{% endblock %}

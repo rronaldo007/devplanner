@@ -1,0 +1,337 @@
+{% extends "planner/_base_dashboard.html" %}
+{% block title %}{{ project.name }} · Assistant · DevPlanner{% endblock %}
+
+{% block content %}
+<div class="flex items-center justify-between gap-3">
+  <div class="min-w-0">
+    <div class="flex items-center gap-2 text-sm text-slate-400">
+      <a href="{% url 'planner:project_detail' project.pk %}" class="hover:text-white">{{ project.name }}</a>
+      <span>/</span>
+      <span class="text-slate-200">Assistant</span>
+    </div>
+    <h1 class="truncate text-2xl font-bold text-white">🤖 Project assistant</h1>
+  </div>
+  <a href="{% url 'planner:project_detail' project.pk %}" class="shrink-0 text-sm text-slate-300 hover:text-white">← back to project</a>
+</div>
+<p class="mt-2 max-w-2xl text-sm text-slate-400">
+  I have your whole project and every document loaded. Ask me to finish a
+  document, rewrite a section, add a new doc, or update project info. I'll
+  <span class="text-slate-200">propose changes</span> — nothing is saved until you click Apply.
+</p>
+
+<div class="mt-6 flex gap-4" style="height: calc(100vh - 16rem); min-height: 26rem;">
+  <!-- Conversations for THIS project only -->
+  <aside class="hidden w-60 shrink-0 flex-col rounded-xl border border-slate-800 bg-slate-900/40 md:flex">
+    <div class="flex items-center justify-between border-b border-slate-800 px-3 py-2.5">
+      <span class="text-xs font-semibold uppercase tracking-wide text-slate-400">Conversations</span>
+      <form method="post" action="{% url 'planner:conversation_new' project.pk %}">
+        {% csrf_token %}
+        <button type="submit" class="rounded-md bg-indigo-600 px-2 py-1 text-xs font-semibold text-white hover:bg-indigo-500">+ New</button>
+      </form>
+    </div>
+    <ul class="flex-1 space-y-0.5 overflow-y-auto p-2">
+      {% for c in conversations %}
+        <li class="group flex items-center gap-1 rounded-md px-2 py-1.5 text-sm
+          {% if c.pk == active_conversation.pk %}bg-slate-800 text-white{% else %}text-slate-300 hover:bg-slate-800/60{% endif %}">
+          <a href="?c={{ c.pk }}" class="min-w-0 flex-1 truncate" title="{{ c.title }}">{{ c.title }}</a>
+          {% if c.pk == active_conversation.pk %}
+            <button type="button" aria-label="Rename conversation"
+              class="conv-rename hidden shrink-0 text-slate-400 hover:text-white group-hover:inline group-focus-within:inline" data-title="{{ c.title }}" title="Rename">✎</button>
+            <form method="post" action="{% url 'planner:conversation_delete' project.pk c.pk %}" class="shrink-0"
+                  onsubmit="return confirm('Delete this conversation and its messages?');">
+              {% csrf_token %}
+              <button type="submit" aria-label="Delete conversation"
+                class="hidden text-slate-400 hover:text-red-400 group-hover:inline group-focus-within:inline" title="Delete">🗑</button>
+            </form>
+          {% endif %}
+        </li>
+      {% endfor %}
+    </ul>
+  </aside>
+
+  <!-- Active conversation -->
+  <div class="flex flex-1 flex-col rounded-xl border border-slate-800 bg-slate-900/40">
+  <!-- Mobile conversation switcher (the sidebar is hidden below md). -->
+  <div class="flex items-center gap-2 border-b border-slate-800 p-2 md:hidden">
+    <label for="conv-mobile" class="sr-only">Conversation</label>
+    <select id="conv-mobile"
+      class="min-w-0 flex-1 rounded-md border border-slate-700 bg-slate-900 px-2 py-1.5 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none">
+      {% for c in conversations %}
+        <option value="{{ c.pk }}" {% if c.pk == active_conversation.pk %}selected{% endif %}>{{ c.title }}</option>
+      {% endfor %}
+    </select>
+    <form method="post" action="{% url 'planner:conversation_new' project.pk %}" class="shrink-0">
+      {% csrf_token %}
+      <button type="submit" aria-label="New conversation"
+        class="rounded-md bg-indigo-600 px-2.5 py-1.5 text-sm font-semibold text-white hover:bg-indigo-500">+ New</button>
+    </form>
+  </div>
+
+  <!-- AI options: per-conversation model choice (Claude / local OSS). -->
+  <div class="flex items-center justify-end gap-2 border-b border-slate-800 px-3 py-2 text-xs text-slate-400">
+    <label for="conv-model">AI model</label>
+    <select id="conv-model"
+      class="max-w-[60%] rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-slate-100 focus:border-indigo-500 focus:outline-none">
+      <optgroup label="Claude">
+        <option data-provider="claude" data-model=""
+          {% if active_conversation.provider == 'claude' and not active_conversation.model %}selected{% endif %}>Claude (default)</option>
+        {% for m in model_options.claude %}
+          <option data-provider="claude" data-model="{{ m }}"
+            {% if active_conversation.provider == 'claude' and active_conversation.model == m %}selected{% endif %}>{{ m }}</option>
+        {% endfor %}
+      </optgroup>
+      {% if model_options.oss %}
+        <optgroup label="Local / OSS">
+          {% for m in model_options.oss %}
+            <option data-provider="oss" data-model="{{ m }}"
+              {% if active_conversation.provider == 'oss' and active_conversation.model == m %}selected{% endif %}>{{ m }}</option>
+          {% endfor %}
+        </optgroup>
+      {% endif %}
+    </select>
+  </div>
+  <form id="conv-model-form" method="post" class="hidden"
+        action="{% url 'planner:conversation_set_model' project.pk active_conversation.pk %}">
+    {% csrf_token %}
+    <input type="hidden" name="provider" id="conv-model-provider">
+    <input type="hidden" name="model" id="conv-model-model">
+  </form>
+
+  <div id="chat-log" class="flex-1 space-y-4 overflow-y-auto p-5">
+    {% for m in chat_messages %}
+      <div class="flex {% if m.role == 'user' %}justify-end{% else %}justify-start{% endif %}">
+        <div class="max-w-[80%] whitespace-pre-wrap rounded-2xl px-4 py-2.5 text-sm leading-relaxed
+          {% if m.role == 'user' %}bg-indigo-600 text-white rounded-br-sm{% else %}bg-slate-800 text-slate-100 rounded-bl-sm{% endif %}">{{ m.content }}</div>
+      </div>
+      {% if m.proposals %}
+        <div class="flex justify-start">
+          <div class="w-[80%] rounded-xl border border-amber-700/40 bg-amber-900/10 p-3 text-sm">
+            <p class="mb-2 font-semibold text-amber-300">Proposed changes</p>
+            <ul class="space-y-1 text-slate-200">
+              {% for c in m.proposals %}
+                <li>• {% if c.type == 'document' %}Document · {{ c.title|default:c.kind }}{% else %}Field · {{ c.field }}{% endif %}{% if c.note %} — <span class="text-slate-400">{{ c.note }}</span>{% endif %}</li>
+              {% endfor %}
+            </ul>
+            <div class="mt-3" data-proposal="{{ m.pk }}">
+              {% if m.proposal_status == 'pending' %}
+                <button class="apply-btn rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-500" data-action="apply" data-id="{{ m.pk }}">Apply</button>
+                <button class="apply-btn rounded-md border border-slate-600 px-3 py-1.5 text-xs font-semibold text-slate-300 hover:bg-slate-800" data-action="discard" data-id="{{ m.pk }}">Discard</button>
+              {% elif m.proposal_status == 'applied' %}
+                <span class="text-xs font-semibold text-emerald-400">✓ Applied</span>
+              {% elif m.proposal_status == 'discarded' %}
+                <span class="text-xs font-semibold text-slate-500">Discarded</span>
+              {% endif %}
+            </div>
+          </div>
+        </div>
+      {% endif %}
+    {% endfor %}
+  </div>
+
+  <form id="chat-form" class="border-t border-slate-800 p-3">
+    <div class="flex items-end gap-2">
+      <textarea id="chat-input" rows="1" autocomplete="off" required
+        placeholder="e.g. Finish the user stories doc, or add a security section to the spec…  (Enter to send)"
+        class="flex-1 resize-none rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-slate-100 placeholder-slate-500 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"></textarea>
+      <button id="chat-send" type="submit"
+        class="inline-flex shrink-0 items-center rounded-md bg-indigo-600 px-4 py-2.5 font-semibold text-white hover:bg-indigo-500 disabled:opacity-50">
+        Send
+      </button>
+    </div>
+  </form>
+  </div>
+</div>
+
+<!-- Hidden form for renaming the active conversation (driven by the ✎ button). -->
+<form id="conv-rename-form" method="post" class="hidden"
+      action="{% url 'planner:conversation_rename' project.pk active_conversation.pk %}">
+  {% csrf_token %}
+  <input type="text" name="title" id="conv-rename-input">
+</form>
+
+<script>
+(function () {
+  const MESSAGE_URL = "{% url 'planner:project_assistant_message' project.pk %}";
+  const APPLY_URL = "{% url 'planner:project_assistant_apply' project.pk %}";
+  const CSRF = "{{ csrf_token }}";
+  const CONVERSATION_ID = "{{ active_conversation.pk }}";
+
+  const log = document.getElementById("chat-log");
+  const form = document.getElementById("chat-form");
+  const input = document.getElementById("chat-input");
+  const sendBtn = document.getElementById("chat-send");
+
+  function scroll() { log.scrollTop = log.scrollHeight; }
+
+  function bubble(role, text) {
+    const row = document.createElement("div");
+    row.className = "flex " + (role === "user" ? "justify-end" : "justify-start");
+    const b = document.createElement("div");
+    b.className = "max-w-[80%] whitespace-pre-wrap rounded-2xl px-4 py-2.5 text-sm leading-relaxed " +
+      (role === "user" ? "bg-indigo-600 text-white rounded-br-sm" : "bg-slate-800 text-slate-100 rounded-bl-sm");
+    b.textContent = text;
+    row.appendChild(b);
+    log.appendChild(row);
+    scroll();
+  }
+
+  function typing() {
+    const row = document.createElement("div");
+    row.className = "flex justify-start";
+    row.innerHTML =
+      '<div class="flex items-center gap-2 rounded-2xl rounded-bl-sm bg-slate-800 px-4 py-2.5 text-sm text-slate-400">' +
+        '<span>Thinking</span><span class="flex gap-1">' +
+        '<span class="h-1.5 w-1.5 rounded-full bg-slate-400 animate-bounce" style="animation-delay:0ms"></span>' +
+        '<span class="h-1.5 w-1.5 rounded-full bg-slate-400 animate-bounce" style="animation-delay:150ms"></span>' +
+        '<span class="h-1.5 w-1.5 rounded-full bg-slate-400 animate-bounce" style="animation-delay:300ms"></span>' +
+      '</span></div>';
+    log.appendChild(row);
+    scroll();
+    return row;
+  }
+
+  function proposalCard(messageId, proposals) {
+    const row = document.createElement("div");
+    row.className = "flex justify-start";
+    let items = proposals.map(function (p) {
+      return '<li>• ' + escapeHtml(p.label) + (p.note ? ' — <span class="text-slate-400">' + escapeHtml(p.note) + '</span>' : '') + '</li>';
+    }).join("");
+    row.innerHTML =
+      '<div class="w-[80%] rounded-xl border border-amber-700/40 bg-amber-900/10 p-3 text-sm">' +
+        '<p class="mb-2 font-semibold text-amber-300">Proposed changes</p>' +
+        '<ul class="space-y-1 text-slate-200">' + items + '</ul>' +
+        '<div class="mt-3" data-proposal="' + messageId + '">' +
+          '<button class="apply-btn rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-500" data-action="apply" data-id="' + messageId + '">Apply</button> ' +
+          '<button class="apply-btn rounded-md border border-slate-600 px-3 py-1.5 text-xs font-semibold text-slate-300 hover:bg-slate-800" data-action="discard" data-id="' + messageId + '">Discard</button>' +
+        '</div>' +
+      '</div>';
+    log.appendChild(row);
+    scroll();
+  }
+
+  function escapeHtml(s) {
+    const d = document.createElement("div");
+    d.textContent = s == null ? "" : s;
+    return d.innerHTML;
+  }
+
+  function setBusy(busy) {
+    sendBtn.disabled = busy;
+    input.disabled = busy;
+    if (!busy) input.focus();
+  }
+
+  async function send(message) {
+    bubble("user", message);
+    setBusy(true);
+    const dots = typing();
+    try {
+      const resp = await fetch(MESSAGE_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-CSRFToken": CSRF },
+        body: JSON.stringify({ message: message, conversation_id: CONVERSATION_ID }),
+      });
+      dots.remove();
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) {
+        bubble("assistant", data.detail || "Something went wrong. Please try again.");
+      } else {
+        bubble("assistant", data.reply || "");
+        if (data.conversation_title) updateActiveTitle(data.conversation_title);
+        if (data.has_proposal) proposalCard(data.message_id, data.proposals || []);
+      }
+    } catch (err) {
+      dots.remove();
+      bubble("assistant", "Network error. Please try again.");
+    }
+    setBusy(false);
+  }
+
+  // Apply / Discard (event delegation on the log).
+  log.addEventListener("click", async function (e) {
+    const btn = e.target.closest(".apply-btn");
+    if (!btn) return;
+    const id = btn.dataset.id;
+    const action = btn.dataset.action;
+    const box = log.querySelector('[data-proposal="' + id + '"]');
+    box.querySelectorAll("button").forEach(function (b) { b.disabled = true; });
+    try {
+      const resp = await fetch(APPLY_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-CSRFToken": CSRF },
+        body: JSON.stringify({ message_id: id, action: action }),
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (resp.ok && data.status === "applied") {
+        box.innerHTML = '<span class="text-xs font-semibold text-emerald-400">✓ Applied — ' + escapeHtml((data.applied || []).join("; ")) + '</span>';
+      } else if (resp.ok && data.status === "discarded") {
+        box.innerHTML = '<span class="text-xs font-semibold text-slate-500">Discarded</span>';
+      } else {
+        box.querySelectorAll("button").forEach(function (b) { b.disabled = false; });
+      }
+    } catch (err) {
+      box.querySelectorAll("button").forEach(function (b) { b.disabled = false; });
+    }
+  });
+
+  scroll();
+
+  // Reflect a server-side auto-title (first message names an untitled thread)
+  // in the sidebar link, rename button, and mobile selector without a reload.
+  function updateActiveTitle(title) {
+    const link = document.querySelector('aside a[href="?c=' + CONVERSATION_ID + '"]');
+    if (link) { link.textContent = title; link.title = title; }
+    const renameBtn = document.querySelector(".conv-rename");
+    if (renameBtn) renameBtn.dataset.title = title;
+    const opt = document.querySelector('#conv-mobile option[value="' + CONVERSATION_ID + '"]');
+    if (opt) opt.textContent = title;
+  }
+
+  // Mobile conversation switcher.
+  const mobileSelect = document.getElementById("conv-mobile");
+  if (mobileSelect) {
+    mobileSelect.addEventListener("change", function () {
+      window.location.search = "?c=" + this.value;
+    });
+  }
+
+  // AI model selector → set provider/model on the conversation and reload.
+  const modelSelect = document.getElementById("conv-model");
+  if (modelSelect) {
+    modelSelect.addEventListener("change", function () {
+      const opt = this.options[this.selectedIndex];
+      document.getElementById("conv-model-provider").value = opt.dataset.provider || "claude";
+      document.getElementById("conv-model-model").value = opt.dataset.model || "";
+      document.getElementById("conv-model-form").submit();
+    });
+  }
+
+  // Rename the active conversation via the ✎ button + a hidden form.
+  const renameForm = document.getElementById("conv-rename-form");
+  const renameInput = document.getElementById("conv-rename-input");
+  document.querySelectorAll(".conv-rename").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      const t = prompt("Rename conversation:", btn.dataset.title || "");
+      if (t && t.trim()) { renameInput.value = t.trim(); renameForm.submit(); }
+    });
+  });
+
+  form.addEventListener("submit", function (e) {
+    e.preventDefault();
+    const message = input.value.trim();
+    if (!message) return;
+    input.value = "";
+    input.style.height = "auto";
+    send(message);
+  });
+  input.addEventListener("keydown", function (e) {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); form.requestSubmit(); }
+  });
+  input.addEventListener("input", function () {
+    input.style.height = "auto";
+    input.style.height = Math.min(input.scrollHeight, 160) + "px";
+  });
+  input.focus();
+})();
+</script>
+{% endblock %}

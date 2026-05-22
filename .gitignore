@@ -5,7 +5,10 @@ db.sqlite3
 .env
 .venv/
 venv/
+.devserver.pid
+.devserver.log
 .idea/
 .vscode/
 *.egg-info/
 staticfiles/
+.claude/settings.local.json

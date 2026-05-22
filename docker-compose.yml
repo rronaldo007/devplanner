@@ -1,0 +1,53 @@
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: devplanner:latest
+    container_name: devplanner-web
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      DJANGO_DEBUG: "false"
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-change-me-in-production-please-this-is-only-for-local-docker-compose-up}
+      DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:-localhost,127.0.0.1}
+      DJANGO_CSRF_TRUSTED_ORIGINS: ${DJANGO_CSRF_TRUSTED_ORIGINS:-http://localhost:8000,http://127.0.0.1:8000}
+      DJANGO_SQLITE_PATH: /app/data/db.sqlite3
+      # Optional: drop in a Claude key here to enable Claude for any user
+      # who hasn't set one in Settings (per-user keys always win).
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-sonnet-4-6}
+    volumes:
+      # Persists SQLite across container restarts.
+      - devplanner-data:/app/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/about/').status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # ---------------------------------------------------------------------------
+  # Postgres profile (optional). Run with:
+  #     docker compose --profile postgres up
+  # and set DATABASE_URL=postgres://devplanner:devplanner@db:5432/devplanner
+  # in your environment to make the web service use it.
+  # ---------------------------------------------------------------------------
+  db:
+    image: postgres:16-alpine
+    container_name: devplanner-db
+    profiles: ["postgres"]
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: devplanner
+      POSTGRES_USER: devplanner
+      POSTGRES_PASSWORD: devplanner
+    volumes:
+      - devplanner-pg:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+volumes:
+  devplanner-data:
+  devplanner-pg:

@@ -1,0 +1,34 @@
+{% extends "planner/_base_dashboard.html" %}
+{% block title %}New document · {{ project.name }} · DevPlanner{% endblock %}
+
+{% block content %}
+<div class="flex items-center gap-2 text-sm text-slate-400">
+  <a href="{% url 'planner:project_detail' project.pk %}" class="hover:text-white">{{ project.name }}</a>
+  <span>/</span>
+  <span class="text-slate-200">New document</span>
+</div>
+<h1 class="mt-1 text-2xl font-bold text-white">Add a custom document</h1>
+<p class="mt-2 text-sm text-slate-400 max-w-2xl">
+  Give it a title and (optionally) describe what it should contain. If your
+  Anthropic API key is set in
+  <a href="{% url 'planner:settings' %}" class="text-indigo-400 hover:underline">Settings</a>,
+  Claude will write the first draft using your interview answers as context.
+  Otherwise you'll get a starter you can fill in yourself.
+</p>
+
+<form method="post" class="mt-6 space-y-4 max-w-2xl">
+  {% csrf_token %}
+  {% for field in form %}
+    <div class="field">
+      <label for="{{ field.id_for_label }}">{{ field.label }}</label>
+      {{ field }}
+      {% if field.help_text %}<p class="hint">{{ field.help_text }}</p>{% endif %}
+      {% if field.errors %}<div class="errors">{{ field.errors }}</div>{% endif %}
+    </div>
+  {% endfor %}
+  <div class="flex items-center gap-3">
+    <button type="submit" class="inline-flex items-center rounded-md bg-indigo-600 px-5 py-2.5 font-semibold text-white hover:bg-indigo-500">Create document</button>
+    <a href="{% url 'planner:project_detail' project.pk %}" class="text-sm text-slate-300 hover:text-white">Cancel</a>
+  </div>
+</form>
+{% endblock %}

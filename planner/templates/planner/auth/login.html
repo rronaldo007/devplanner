@@ -1,0 +1,39 @@
+{% extends "planner/_base_public.html" %}
+{% block title %}Log in · DevPlanner{% endblock %}
+
+{% block content %}
+<section class="max-w-md mx-auto px-6 py-16">
+  <h1 class="text-2xl font-bold text-white">Log in</h1>
+  <p class="mt-2 text-sm text-slate-400">
+    Don't have an account? <a href="{% url 'planner:register' %}" class="text-indigo-400 hover:underline">Create one</a>.
+  </p>
+
+  <form method="post" class="mt-6 space-y-4">
+    {% csrf_token %}
+    {% if form.non_field_errors %}
+      <div class="rounded-md border border-red-700 bg-red-900/30 px-3 py-2 text-sm text-red-200">
+        {{ form.non_field_errors }}
+      </div>
+    {% endif %}
+
+    <div class="field">
+      <label for="{{ form.username.id_for_label }}">Username or email</label>
+      {{ form.username }}
+      {% if form.username.errors %}<div class="errors">{{ form.username.errors }}</div>{% endif %}
+    </div>
+
+    <div class="field">
+      <label for="{{ form.password.id_for_label }}">Password</label>
+      {{ form.password }}
+      {% if form.password.errors %}<div class="errors">{{ form.password.errors }}</div>{% endif %}
+      <p class="mt-1 text-right text-xs">
+        <a href="{% url 'planner:password_reset' %}" class="text-indigo-400 hover:underline">Forgot your password?</a>
+      </p>
+    </div>
+
+    <button type="submit" class="w-full inline-flex justify-center items-center rounded-md bg-indigo-600 px-4 py-2.5 font-semibold text-white hover:bg-indigo-500">
+      Log in
+    </button>
+  </form>
+</section>
+{% endblock %}

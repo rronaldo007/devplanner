@@ -1,0 +1,52 @@
+# Version control
+.git
+.gitignore
+.gitattributes
+
+# Python
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv
+venv
+env
+ENV
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.tox
+*.egg-info
+.eggs
+build
+dist
+
+# Local Django artifacts
+db.sqlite3
+db.sqlite3-journal
+staticfiles
+media
+
+# Editor / OS
+.vscode
+.idea
+.DS_Store
+Thumbs.db
+
+# CI / docs that don't need to be in the image
+.github
+.devin
+docs
+
+# Docker stuff itself
+Dockerfile
+.dockerignore
+docker-compose*.yml
+
+# Misc
+*.log
+*.env
+.env
+.env.*
+!.env.example
