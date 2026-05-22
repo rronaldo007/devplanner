@@ -1028,6 +1028,7 @@ def _apply_document_change(project: Project, change: dict) -> str | None:
             kind=kind if kind in _VALID_DOC_KINDS else Document.KIND_CUSTOM,
         )
 
+    is_new = doc.pk is None
     title = (change.get("title") or "").strip()
     if title:
         doc.title = title
@@ -1035,8 +1036,15 @@ def _apply_document_change(project: Project, change: dict) -> str | None:
         doc.title = (kind or "Document").replace("_", " ").title()
     doc.body = body
     doc.is_generated = False  # assistant-edited; treat as hand-authored
+    # Custom docs: classify into a spec-pack category (built-in kinds get their
+    # category from Document.save()). Keeps assistant-made files out of "Other".
+    if doc.kind == Document.KIND_CUSTOM:
+        doc.category = generators.classify_document(
+            project, title=doc.title, body=doc.body
+        )["category"]
     doc.save()
-    return f"Updated document “{doc.title}”"
+    verb = "Created" if is_new else "Updated"
+    return f"{verb} document “{doc.title}”"
 
 
 def _apply_field_change(project: Project, change: dict) -> tuple[str | None, str | None]:
