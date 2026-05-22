@@ -19,8 +19,36 @@
   <span class="text-slate-200">propose changes</span> — nothing is saved until you click Apply.
 </p>
 
-<div class="mt-6 flex flex-col rounded-xl border border-slate-800 bg-slate-900/40"
-     style="height: calc(100vh - 16rem); min-height: 26rem;">
+<div class="mt-6 flex gap-4" style="height: calc(100vh - 16rem); min-height: 26rem;">
+  <!-- Conversations for THIS project only -->
+  <aside class="hidden w-60 shrink-0 flex-col rounded-xl border border-slate-800 bg-slate-900/40 md:flex">
+    <div class="flex items-center justify-between border-b border-slate-800 px-3 py-2.5">
+      <span class="text-xs font-semibold uppercase tracking-wide text-slate-400">Conversations</span>
+      <form method="post" action="{% url 'planner:conversation_new' project.pk %}">
+        {% csrf_token %}
+        <button type="submit" class="rounded-md bg-indigo-600 px-2 py-1 text-xs font-semibold text-white hover:bg-indigo-500">+ New</button>
+      </form>
+    </div>
+    <ul class="flex-1 space-y-0.5 overflow-y-auto p-2">
+      {% for c in conversations %}
+        <li class="group flex items-center gap-1 rounded-md px-2 py-1.5 text-sm
+          {% if c.pk == active_conversation.pk %}bg-slate-800 text-white{% else %}text-slate-300 hover:bg-slate-800/60{% endif %}">
+          <a href="?c={{ c.pk }}" class="min-w-0 flex-1 truncate" title="{{ c.title }}">{{ c.title }}</a>
+          {% if c.pk == active_conversation.pk %}
+            <button type="button" class="conv-rename hidden shrink-0 text-slate-400 hover:text-white group-hover:inline" data-title="{{ c.title }}" title="Rename">✎</button>
+            <form method="post" action="{% url 'planner:conversation_delete' project.pk c.pk %}" class="shrink-0"
+                  onsubmit="return confirm('Delete this conversation and its messages?');">
+              {% csrf_token %}
+              <button type="submit" class="hidden text-slate-400 hover:text-red-400 group-hover:inline" title="Delete">🗑</button>
+            </form>
+          {% endif %}
+        </li>
+      {% endfor %}
+    </ul>
+  </aside>
+
+  <!-- Active conversation -->
+  <div class="flex flex-1 flex-col rounded-xl border border-slate-800 bg-slate-900/40">
   <div id="chat-log" class="flex-1 space-y-4 overflow-y-auto p-5">
     {% for m in chat_messages %}
       <div class="flex {% if m.role == 'user' %}justify-end{% else %}justify-start{% endif %}">
@@ -63,13 +91,22 @@
       </button>
     </div>
   </form>
+  </div>
 </div>
+
+<!-- Hidden form for renaming the active conversation (driven by the ✎ button). -->
+<form id="conv-rename-form" method="post" class="hidden"
+      action="{% url 'planner:conversation_rename' project.pk active_conversation.pk %}">
+  {% csrf_token %}
+  <input type="text" name="title" id="conv-rename-input">
+</form>
 
 <script>
 (function () {
   const MESSAGE_URL = "{% url 'planner:project_assistant_message' project.pk %}";
   const APPLY_URL = "{% url 'planner:project_assistant_apply' project.pk %}";
   const CSRF = "{{ csrf_token }}";
+  const CONVERSATION_ID = "{{ active_conversation.pk }}";
 
   const log = document.getElementById("chat-log");
   const form = document.getElementById("chat-form");
@@ -144,7 +181,7 @@
       const resp = await fetch(MESSAGE_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-CSRFToken": CSRF },
-        body: JSON.stringify({ message: message }),
+        body: JSON.stringify({ message: message, conversation_id: CONVERSATION_ID }),
       });
       dots.remove();
       const data = await resp.json().catch(() => ({}));
@@ -189,6 +226,16 @@
   });
 
   scroll();
+
+  // Rename the active conversation via the ✎ button + a hidden form.
+  const renameForm = document.getElementById("conv-rename-form");
+  const renameInput = document.getElementById("conv-rename-input");
+  document.querySelectorAll(".conv-rename").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      const t = prompt("Rename conversation:", btn.dataset.title || "");
+      if (t && t.trim()) { renameInput.value = t.trim(); renameForm.submit(); }
+    });
+  });
 
   form.addEventListener("submit", function (e) {
     e.preventDefault();

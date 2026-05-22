@@ -626,10 +626,15 @@ class ProjectAssistantTests(TestCase):
             + json.dumps({"summary": summary, "changes": changes})
         )
 
-    def _send(self, message):
+    def _send(self, message, conversation=None):
+        conv = (
+            conversation
+            or self.project.conversations.first()
+            or self.project.conversations.create(title="General")
+        )
         return self.client.post(
             reverse("planner:project_assistant_message", args=[self.project.pk]),
-            data=json.dumps({"message": message}),
+            data=json.dumps({"message": message, "conversation_id": conv.pk}),
             content_type="application/json",
         )
 
@@ -1448,10 +1453,12 @@ class ChatErrorUXTests(TestCase):
 
     def test_assistant_credit_error_then_success_clears_flag(self):
         project = _make_project(self.user)
+        conv = project.conversations.create(title="General")
         _install_anthropic_credit_error()
         resp = self.client.post(
             reverse("planner:project_assistant_message", args=[project.pk]),
-            data=json.dumps({"message": "go"}), content_type="application/json",
+            data=json.dumps({"message": "go", "conversation_id": conv.pk}),
+            content_type="application/json",
         )
         self.assertEqual(resp.status_code, 502)
         self.assertEqual(resp.json()["error"], "credits")
@@ -1460,7 +1467,8 @@ class ChatErrorUXTests(TestCase):
         _install_anthropic_stub("All good, nothing to change.")
         ok = self.client.post(
             reverse("planner:project_assistant_message", args=[project.pk]),
-            data=json.dumps({"message": "thanks"}), content_type="application/json",
+            data=json.dumps({"message": "thanks", "conversation_id": conv.pk}),
+            content_type="application/json",
         )
         self.assertEqual(ok.status_code, 200)
         self.assertIsNone(self.client.session.get("ai_status"))
@@ -1969,3 +1977,105 @@ class OssEngineTests(TestCase):
         out = classify_document(project, title="Pricing and revenue", body="market KPIs")
         self.assertEqual(out["engine"], "keyword")
         self.assertEqual(out["category"], Document.CATEGORY_BUSINESS)
+
+
+# ===========================================================================
+# Conversations (named assistant threads, per project)
+# ===========================================================================
+class ConversationTests(TestCase):
+    def setUp(self):
+        self.user = _make_user(api_key="user-sk-test")
+        self.project = _make_project(self.user)
+        self.client.force_login(self.user)
+        self._orig = sys.modules.get("anthropic")
+
+    def tearDown(self):
+        if self._orig is None:
+            sys.modules.pop("anthropic", None)
+        else:
+            sys.modules["anthropic"] = self._orig
+
+    def _post(self, conv, message):
+        return self.client.post(
+            reverse("planner:project_assistant_message", args=[self.project.pk]),
+            data=json.dumps({"message": message, "conversation_id": conv.pk}),
+            content_type="application/json",
+        )
+
+    def test_assistant_page_creates_first_conversation(self):
+        _install_anthropic_stub("hi")
+        self.assertEqual(self.project.conversations.count(), 0)
+        resp = self.client.get(reverse("planner:project_assistant", args=[self.project.pk]))
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(self.project.conversations.count(), 1)
+        self.assertEqual(resp.context["active_conversation"].messages.count(), 1)  # opening
+
+    def test_new_conversation_redirects_with_active(self):
+        from planner.models import Conversation
+        resp = self.client.post(reverse("planner:conversation_new", args=[self.project.pk]))
+        conv = self.project.conversations.latest("id")
+        self.assertRedirects(
+            resp,
+            reverse("planner:project_assistant", args=[self.project.pk]) + f"?c={conv.pk}",
+        )
+        self.assertEqual(conv.title, Conversation.DEFAULT_TITLE)
+
+    def test_message_history_is_scoped_per_conversation(self):
+        _install_anthropic_stub("reply")
+        diagrams = self.project.conversations.create(title="Diagrams")
+        database = self.project.conversations.create(title="Database")
+        self._post(diagrams, "about diagrams")
+        self._post(database, "about the database")
+        diag_contents = [m.content for m in diagrams.messages.all()]
+        db_contents = [m.content for m in database.messages.all()]
+        self.assertIn("about diagrams", diag_contents)
+        self.assertNotIn("about the database", diag_contents)
+        self.assertIn("about the database", db_contents)
+        self.assertNotIn("about diagrams", db_contents)
+
+    def test_first_message_auto_titles_untitled_conversation(self):
+        from planner.models import Conversation
+        _install_anthropic_stub("reply")
+        conv = self.project.conversations.create(title=Conversation.DEFAULT_TITLE)
+        self._post(conv, "Design the database schema")
+        conv.refresh_from_db()
+        self.assertNotEqual(conv.title, Conversation.DEFAULT_TITLE)
+        self.assertTrue(conv.title)
+
+    def test_rename_conversation(self):
+        conv = self.project.conversations.create(title="old")
+        resp = self.client.post(
+            reverse("planner:conversation_rename", args=[self.project.pk, conv.pk]),
+            {"title": "Diagrams thread"},
+        )
+        self.assertEqual(resp.status_code, 302)
+        conv.refresh_from_db()
+        self.assertEqual(conv.title, "Diagrams thread")
+
+    def test_delete_conversation_removes_messages(self):
+        _install_anthropic_stub("reply")
+        conv = self.project.conversations.create(title="temp")
+        self._post(conv, "hello")
+        self.assertTrue(conv.messages.exists())
+        resp = self.client.post(
+            reverse("planner:conversation_delete", args=[self.project.pk, conv.pk])
+        )
+        self.assertEqual(resp.status_code, 302)
+        self.assertFalse(self.project.conversations.filter(pk=conv.pk).exists())
+
+    def test_cannot_post_to_another_projects_conversation(self):
+        _install_anthropic_stub("reply")
+        other = _make_project(self.user, name="Other")
+        foreign = other.conversations.create(title="foreign")
+        resp = self._post(foreign, "hi")  # foreign belongs to `other`, not self.project
+        self.assertEqual(resp.status_code, 404)
+
+    def test_conversations_are_listed_per_project_only(self):
+        _install_anthropic_stub("hi")
+        self.project.conversations.create(title="Mine")
+        other = _make_project(self.user, name="Other")
+        other.conversations.create(title="Theirs")
+        resp = self.client.get(reverse("planner:project_assistant", args=[self.project.pk]))
+        titles = [c.title for c in resp.context["conversations"]]
+        self.assertIn("Mine", titles)
+        self.assertNotIn("Theirs", titles)
