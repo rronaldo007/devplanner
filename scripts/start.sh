@@ -69,6 +69,14 @@ fi
 # Dev defaults: debug on unless the env already says otherwise.
 export DJANGO_DEBUG="${DJANGO_DEBUG:-true}"
 
+# Optional: MAILPIT=1 starts a local Mailpit mail catcher and routes emails to
+# it (web inbox at http://localhost:8025) instead of the console.
+if [ "${MAILPIT:-}" = "1" ] || [ "${MAILPIT:-}" = "true" ]; then
+    "$ROOT/scripts/mailpit.sh" start || true
+    export DJANGO_DEV_SMTP="${DJANGO_DEV_SMTP:-localhost:1025}"
+    echo "[start] emails -> Mailpit inbox at http://localhost:8025"
+fi
+
 # 4. Migrations
 echo "[start] applying migrations ..."
 python manage.py migrate --noinput

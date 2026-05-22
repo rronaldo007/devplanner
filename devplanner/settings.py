@@ -194,7 +194,18 @@ LOGOUT_REDIRECT_URL = "planner:home"
 # production, configure SMTP via env. Reset links expire after this many
 # seconds (Django default is 3 days).
 if DEBUG:
-    EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
+    # Set DJANGO_DEV_SMTP=host:port (e.g. localhost:1025) to send to a local
+    # mail catcher like Mailpit/MailHog and view emails in its web inbox.
+    # Otherwise emails print to the server console.
+    _dev_smtp = os.environ.get("DJANGO_DEV_SMTP", "").strip()
+    if _dev_smtp:
+        host, _, port = _dev_smtp.partition(":")
+        EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
+        EMAIL_HOST = host or "localhost"
+        EMAIL_PORT = int(port or "1025")
+        EMAIL_USE_TLS = False
+    else:
+        EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
 else:
     EMAIL_BACKEND = os.environ.get(
         "DJANGO_EMAIL_BACKEND", "django.core.mail.backends.smtp.EmailBackend"
