@@ -321,6 +321,17 @@ class ChatMessage(models.Model):
 
     class Meta:
         ordering = ["created_at", "id"]
+        constraints = [
+            # Enforce the load-bearing invariant: assistant messages belong to a
+            # conversation; intake messages never do.
+            models.CheckConstraint(
+                name="chatmessage_phase_conversation_consistency",
+                condition=(
+                    models.Q(phase="assistant", conversation__isnull=False)
+                    | models.Q(phase="intake", conversation__isnull=True)
+                ),
+            ),
+        ]
 
     def __str__(self) -> str:
         return f"{self.phase}/{self.role}: {self.content[:40]}"

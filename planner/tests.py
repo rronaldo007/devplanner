@@ -2081,6 +2081,46 @@ class ConversationTests(TestCase):
         self.assertNotIn("Theirs", titles)
 
 
+class ChatMessagePhaseConversationConstraintTests(TestCase):
+    """The DB constraint coupling phase and conversation nullability."""
+
+    def setUp(self):
+        self.user = _make_user()
+        self.project = _make_project(self.user)
+
+    def test_assistant_message_without_conversation_rejected(self):
+        from django.db import IntegrityError, transaction
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                ChatMessage.objects.create(
+                    project=self.project, phase=ChatMessage.PHASE_ASSISTANT,
+                    role=ChatMessage.ROLE_ASSISTANT, content="x", conversation=None,
+                )
+
+    def test_intake_message_with_conversation_rejected(self):
+        from django.db import IntegrityError, transaction
+        conv = self.project.conversations.create(title="c")
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                ChatMessage.objects.create(
+                    project=self.project, phase=ChatMessage.PHASE_INTAKE,
+                    role=ChatMessage.ROLE_USER, content="x", conversation=conv,
+                )
+
+    def test_valid_combinations_allowed(self):
+        conv = self.project.conversations.create(title="c")
+        # assistant + conversation OK; intake + no conversation OK
+        ChatMessage.objects.create(
+            project=self.project, phase=ChatMessage.PHASE_ASSISTANT,
+            role=ChatMessage.ROLE_ASSISTANT, content="a", conversation=conv,
+        )
+        ChatMessage.objects.create(
+            project=self.project, phase=ChatMessage.PHASE_INTAKE,
+            role=ChatMessage.ROLE_USER, content="b",
+        )
+        self.assertEqual(self.project.chat_messages.count(), 2)
+
+
 # ===========================================================================
 # AI banner on the generation paths (project creation + regenerate)
 # ===========================================================================
