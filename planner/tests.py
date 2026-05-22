@@ -1332,3 +1332,30 @@ class NotesTests(TestCase):
         pk = self.project.pk
         self.project.delete()
         self.assertFalse(Note.objects.filter(project_id=pk).exists())
+
+
+# ===========================================================================
+# Admin (django-unfold)
+# ===========================================================================
+class AdminSmokeTests(TestCase):
+    """The Unfold-themed admin loads (validates UNFOLD nav links + ModelAdmins)."""
+
+    def setUp(self):
+        self.admin = User.objects.create_superuser(
+            username="root", password="hunter2hunter2", email="root@example.com"
+        )
+        self.client.force_login(self.admin)
+
+    def test_admin_index_loads(self):
+        self.assertEqual(self.client.get(reverse("admin:index")).status_code, 200)
+
+    def test_planner_changelists_load(self):
+        for model in ("project", "document", "chatmessage", "userprofile", "note"):
+            url = reverse(f"admin:planner_{model}_changelist")
+            self.assertEqual(self.client.get(url).status_code, 200, model)
+
+    def test_project_change_form_loads(self):
+        owner = _make_user(username="owner")
+        project = _make_project(owner)
+        url = reverse("admin:planner_project_change", args=[project.pk])
+        self.assertEqual(self.client.get(url).status_code, 200)

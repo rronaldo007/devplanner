@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 
 from django.core.exceptions import ImproperlyConfigured
+from django.urls import reverse_lazy
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -66,6 +67,10 @@ CSRF_TRUSTED_ORIGINS = _env_list("DJANGO_CSRF_TRUSTED_ORIGINS", [])
 # Apps & middleware
 # ---------------------------------------------------------------------------
 INSTALLED_APPS = [
+    # Unfold must come before django.contrib.admin to override its templates.
+    "unfold",
+    "unfold.contrib.filters",
+    "unfold.contrib.forms",
     "django.contrib.admin",
     "django.contrib.auth",
     "django.contrib.contenttypes",
@@ -155,11 +160,17 @@ USE_TZ = True
 STATIC_URL = "static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 
-# Compressed + hashed static files served by WhiteNoise.
+# Compressed + hashed static files via WhiteNoise in production (requires
+# `collectstatic`). In DEBUG, use plain storage so runserver/tests resolve
+# static URLs (e.g. Unfold admin assets) without a built manifest.
 STORAGES = {
     "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
     "staticfiles": {
-        "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
+        "BACKEND": (
+            "django.contrib.staticfiles.storage.StaticFilesStorage"
+            if DEBUG
+            else "whitenoise.storage.CompressedManifestStaticFilesStorage"
+        ),
     },
 }
 
@@ -186,3 +197,84 @@ if not DEBUG:
     if SECURE_HSTS_SECONDS:
         SECURE_HSTS_INCLUDE_SUBDOMAINS = True
         SECURE_HSTS_PRELOAD = True
+
+
+# ---------------------------------------------------------------------------
+# Admin theme (django-unfold)
+# ---------------------------------------------------------------------------
+# Indigo primary palette to match the app's dashboard accent (Tailwind indigo).
+UNFOLD = {
+    "SITE_TITLE": "DevPlanner Admin",
+    "SITE_HEADER": "DevPlanner",
+    "SITE_SUBHEADER": "Project planning workspace",
+    "SITE_URL": "/",
+    "SHOW_HISTORY": True,
+    "SHOW_VIEW_ON_SITE": True,
+    "THEME": None,  # let users toggle light / dark
+    "BORDER_RADIUS": "8px",
+    "COLORS": {
+        "primary": {
+            "50": "238 242 255",
+            "100": "224 231 255",
+            "200": "199 210 254",
+            "300": "165 180 252",
+            "400": "129 140 248",
+            "500": "99 102 241",
+            "600": "79 70 229",
+            "700": "67 56 202",
+            "800": "55 48 163",
+            "900": "49 46 129",
+            "950": "30 27 75",
+        },
+    },
+    "SIDEBAR": {
+        "show_search": True,
+        "show_all_applications": True,
+        "navigation": [
+            {
+                "title": "Planner",
+                "separator": True,
+                "collapsible": False,
+                "items": [
+                    {
+                        "title": "Projects",
+                        "icon": "folder",
+                        "link": reverse_lazy("admin:planner_project_changelist"),
+                    },
+                    {
+                        "title": "Documents",
+                        "icon": "description",
+                        "link": reverse_lazy("admin:planner_document_changelist"),
+                    },
+                    {
+                        "title": "Chat messages",
+                        "icon": "forum",
+                        "link": reverse_lazy("admin:planner_chatmessage_changelist"),
+                    },
+                    {
+                        "title": "User profiles",
+                        "icon": "badge",
+                        "link": reverse_lazy("admin:planner_userprofile_changelist"),
+                    },
+                ],
+            },
+            {
+                "title": "Accounts",
+                "separator": True,
+                "collapsible": True,
+                "items": [
+                    {
+                        "title": "Users",
+                        "icon": "group",
+                        "link": reverse_lazy("admin:auth_user_changelist"),
+                    },
+                    {
+                        "title": "Groups",
+                        "icon": "shield_person",
+                        "link": reverse_lazy("admin:auth_group_changelist"),
+                    },
+                ],
+            },
+        ],
+    },
+}
