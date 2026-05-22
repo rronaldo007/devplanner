@@ -67,24 +67,60 @@ def _claude_available(project: "Project") -> bool:
     return True
 
 
+def _profile_of(project: "Project"):
+    user = getattr(project, "owner", None)
+    return getattr(user, "profile", None) if user is not None else None
+
+
+def _preferred_provider(project: "Project") -> str:
+    """The owner's preferred generation backend ('claude' or 'oss')."""
+
+    profile = _profile_of(project)
+    return getattr(profile, "ai_provider", "claude") or "claude"
+
+
+def _oss_kwargs(project: "Project") -> dict:
+    """OSS call config with the owner's chosen model (falling back to env)."""
+
+    from . import oss
+
+    cfg = dict(oss.config())
+    profile = _profile_of(project)
+    user_model = (getattr(profile, "oss_model", "") or "").strip() if profile else ""
+    if user_model:
+        cfg["model"] = user_model
+    return cfg
+
+
+def _oss_generation_ready(project: "Project") -> bool:
+    """OSS can generate for this project: an endpoint + a resolved model."""
+
+    cfg = _oss_kwargs(project)
+    return bool(cfg["base_url"] and cfg["model"])
+
+
 def _ai_tiers(project: "Project", force: str | None = None) -> list[str]:
     """Ordered AI engines to try before the deterministic fallback.
 
-    ``claude`` first (best quality), then ``oss`` (free/cheap — Ollama or any
-    OpenAI-compatible host) when configured. ``force`` pins a single engine;
-    ``force="templates"`` skips AI entirely.
+    Order respects the owner's preference: if they chose ``oss`` (to save Claude
+    tokens), generate locally first, then fall back to Claude, then templates.
+    Otherwise Claude first. ``force`` pins a single engine; ``force="templates"``
+    skips AI entirely.
     """
 
     if force == "templates":
         return []
     if force in ("claude", "oss"):
         return [force]
-    from . import oss
 
+    claude_ok = _claude_available(project)
+    oss_ok = _oss_generation_ready(project)
     tiers: list[str] = []
-    if _claude_available(project):
+    if _preferred_provider(project) == "oss" and oss_ok:
+        tiers.append("oss")
+    if claude_ok:
         tiers.append("claude")
-    if oss.is_configured():
+    if oss_ok and "oss" not in tiers:
         tiers.append("oss")
     return tiers
 
@@ -111,7 +147,7 @@ def generate_all(project: "Project", *, force_engine: str | None = None) -> dict
             else:  # oss
                 from . import oss
 
-                docs = oss.generate_documents(project, **oss.config())
+                docs = oss.generate_documents(project, **_oss_kwargs(project))
             engine = tier
             break
         except Exception as exc:
@@ -156,7 +192,7 @@ def generate_custom(project: "Project", title: str, prompt: str) -> dict:
                 from . import oss
 
                 body = oss.generate_custom(
-                    project, title=title, prompt=prompt, **oss.config()
+                    project, title=title, prompt=prompt, **_oss_kwargs(project)
                 )
             return {"engine": tier, "body": body}
         except Exception as exc:
@@ -192,7 +228,7 @@ def classify_document(
             else:  # oss
                 from . import oss
 
-                category = oss.classify(title, body, **oss.config())
+                category = oss.classify(title, body, **_oss_kwargs(project))
             return {"category": category, "engine": tier}
         except Exception as exc:
             ai_error = str(exc)

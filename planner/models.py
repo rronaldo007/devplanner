@@ -41,6 +41,25 @@ class UserProfile(models.Model):
         max_length=2, choices=LANG_CHOICES, default=LANG_EN,
         help_text="Default language for newly created projects.",
     )
+
+    # Which backend to PREFER for document generation. "oss" generates on a
+    # local/Ollama model first (saving Claude tokens), falling back to Claude
+    # then templates. "claude" keeps the default Claude-first behaviour.
+    AI_PROVIDER_CLAUDE = "claude"
+    AI_PROVIDER_OSS = "oss"
+    AI_PROVIDER_CHOICES = [
+        (AI_PROVIDER_CLAUDE, "Claude"),
+        (AI_PROVIDER_OSS, "Local / OSS (Ollama-compatible)"),
+    ]
+    ai_provider = models.CharField(
+        max_length=10, choices=AI_PROVIDER_CHOICES, default=AI_PROVIDER_CLAUDE,
+        help_text="Preferred backend for generating documents.",
+    )
+    oss_model = models.CharField(
+        max_length=100, blank=True,
+        help_text="Local/OSS model id used when generating with the local provider "
+                  "(e.g. gemma4:26b). Blank uses the server's OSS_MODEL default.",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
