@@ -145,6 +145,13 @@ AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.NumericPasswordValidator"},
 ]
 
+# Allow login with either username or email (custom backend), keeping the
+# default ModelBackend as a fallback so admin/createsuperuser still work.
+AUTHENTICATION_BACKENDS = [
+    "planner.auth_backends.EmailOrUsernameModelBackend",
+    "django.contrib.auth.backends.ModelBackend",
+]
+
 
 # ---------------------------------------------------------------------------
 # Internationalization

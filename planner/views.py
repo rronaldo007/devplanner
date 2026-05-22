@@ -76,7 +76,12 @@ def register(request):
         form = RegisterForm(request.POST)
         if form.is_valid():
             user = form.save()
-            auth_login(request, user)
+            # Multiple auth backends are configured (username/email + default),
+            # so name the one to log in with explicitly.
+            auth_login(
+                request, user,
+                backend="planner.auth_backends.EmailOrUsernameModelBackend",
+            )
             messages.success(request, "Welcome! Your account is ready.")
             return HttpResponseRedirect(reverse("planner:dashboard"))
     else:

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from django import forms
 from django.contrib.auth import get_user_model
-from django.contrib.auth.forms import UserCreationForm
+from django.contrib.auth.forms import AuthenticationForm, UserCreationForm
 
 from .models import Document, Note, Project, UserProfile
 
@@ -23,6 +23,18 @@ class RegisterForm(UserCreationForm):
     class Meta(UserCreationForm.Meta):
         model = User
         fields = ("username", "email")
+
+
+class EmailOrUsernameLoginForm(AuthenticationForm):
+    """Login form that accepts a username *or* an email address.
+
+    Authentication is handled by ``EmailOrUsernameModelBackend``; this just
+    relabels the field so the UI matches what's accepted.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["username"].label = "Username or email"
 
 
 # ===========================================================================
