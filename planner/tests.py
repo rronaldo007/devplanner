@@ -2309,3 +2309,37 @@ class OssOllamaHostFallbackTests(TestCase):
         env = {"OSS_BASE_URL": "http://explicit:1234/v1", "OLLAMA_HOST": "http://other:11434"}
         with mock.patch.dict(os.environ, env):
             self.assertEqual(oss.config()["base_url"], "http://explicit:1234/v1")
+
+
+# ===========================================================================
+# Lenient proposal parsing (OSS path tolerance for weaker models)
+# ===========================================================================
+class LenientProposalParsingTests(TestCase):
+    def test_strict_ignores_fenced_json_without_marker(self):
+        text = 'Sure.\n```json\n{"changes":[{"type":"field","field":"stack","value":"Go"}]}\n```'
+        changes, _ = chat_mod._parse_proposal(text)  # strict (Claude)
+        self.assertIsNone(changes)
+
+    def test_lenient_accepts_fenced_json_without_marker(self):
+        text = 'Sure.\n```json\n{"changes":[{"type":"field","field":"stack","value":"Go"}]}\n```'
+        changes, _ = chat_mod._parse_proposal(text, lenient=True)
+        self.assertEqual(len(changes), 1)
+        self.assertEqual(changes[0]["field"], "stack")
+
+    def test_lenient_accepts_bare_change_and_normalizes_kind(self):
+        # deepseek-style: a single bare change with an invalid kind.
+        text = ('Here is the doc:\n```json\n'
+                '{"type":"document","document_id":null,"kind":"Security Plan",'
+                '"title":"Security Plan","body":"# Security Plan\\n..."}\n```')
+        changes, _ = chat_mod._parse_proposal(text, lenient=True)
+        self.assertEqual(len(changes), 1)
+        self.assertEqual(changes[0]["kind"], "custom")  # invalid kind → custom
+        self.assertEqual(changes[0]["title"], "Security Plan")
+
+    def test_lenient_strips_json_from_reply(self):
+        text = ('I drafted it.\n```json\n{"changes":[{"type":"document","kind":"custom",'
+                '"title":"X","body":"# X"}]}\n```')
+        res = chat_mod._finish_assistant_turn(text, "en", False, lenient=True)
+        self.assertTrue(res["proposals"])
+        self.assertNotIn("```", res["reply"])
+        self.assertIn("I drafted it.", res["reply"])

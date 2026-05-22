@@ -525,6 +525,7 @@ def _assistant_turn_oss(
     cfg = oss.config()
     system_text = (
         _assistant_system_prompt(language_name, web_search=False)
+        + _OSS_PROPOSAL_EXAMPLE
         + "\n\n# CURRENT PROJECT CONTEXT\n"
         + context
     )
@@ -537,16 +538,41 @@ def _assistant_turn_oss(
     choice = response.choices[0]
     text = (choice.message.content or "").strip()
     truncated = getattr(choice, "finish_reason", None) == "length"
-    return _finish_assistant_turn(text, language, truncated)
+    # Lenient parsing: smaller models often drop the marker or wrap the JSON in
+    # a code fence — accept those rather than losing the change.
+    return _finish_assistant_turn(text, language, truncated, lenient=True)
 
 
-def _finish_assistant_turn(text: str, language: str, truncated: bool) -> dict:
-    """Shared post-processing for a raw assistant response (both backends)."""
+# Concrete example shown only to OSS models (which follow the format less
+# reliably than Claude). Demonstrates the exact marker + envelope.
+_OSS_PROPOSAL_EXAMPLE = (
+    "\n\n# EXAMPLE of a proposal turn (follow this format EXACTLY)\n"
+    "User: Add a custom doc called \"Security Plan\".\n"
+    "Assistant:\n"
+    "I've drafted a Security Plan.\n"
+    + PROPOSAL_MARKER + "\n"
+    '{"summary": "Add a Security Plan document", "changes": [{"type": "document", '
+    '"kind": "custom", "title": "Security Plan", "body": "# Security Plan\\n\\n'
+    '## Authentication\\n- ...\\n"}]}'
+)
 
-    proposals, summary = _parse_proposal(text)
+
+def _finish_assistant_turn(
+    text: str, language: str, truncated: bool, *, lenient: bool = False,
+) -> dict:
+    """Shared post-processing for a raw assistant response (both backends).
+
+    ``lenient`` (OSS path) accepts a proposal that omits the marker / wraps the
+    JSON in a code fence, and strips that blob out of the shown reply.
+    """
+
+    proposals, summary = _parse_proposal(text, lenient=lenient)
     reply = text
     if PROPOSAL_MARKER in text:
         reply = text.split(PROPOSAL_MARKER, 1)[0].strip()
+    elif lenient and proposals:
+        # No marker, but we extracted a JSON proposal — strip it from the reply.
+        reply = _strip_json_blob(text).strip()
     if proposals and not reply:
         reply = summary or "Here's what I'd change — review and apply below."
     # If we ran out of room before a valid proposal closed, say so rather than
@@ -563,26 +589,81 @@ def _finish_assistant_turn(text: str, language: str, truncated: bool) -> dict:
     return {"reply": reply, "proposals": proposals or [], "summary": summary}
 
 
-def _parse_proposal(text: str) -> tuple[list | None, str]:
-    """Extract ``(changes, summary)`` from a proposal marker, if present/valid."""
+def _parse_proposal(text: str, *, lenient: bool = False) -> tuple[list | None, str]:
+    """Extract ``(changes, summary)`` from a proposal.
 
-    if PROPOSAL_MARKER not in text:
+    Strict (default): requires the ``===PROPOSAL===`` marker. ``lenient`` (OSS
+    path) additionally accepts an unmarked proposal — a fenced/bare JSON object
+    that is either the ``{"summary","changes":[...]}`` envelope or a single
+    bare change dict — since small models often drop the marker.
+    """
+
+    if PROPOSAL_MARKER in text:
+        after = text.split(PROPOSAL_MARKER, 1)[1].strip()
+        result = _changes_from(_loads_json_blob(after))
+        if result is not None or not lenient:
+            return result if result is not None else (None, "")
+    elif not lenient:
         return None, ""
-    after = text.split(PROPOSAL_MARKER, 1)[1].strip()
-    if after.startswith("```"):
-        after = re.sub(r"^```[a-zA-Z]*\n?|\n?```$", "", after.strip())
-    start = after.find("{")
-    end = after.rfind("}")
-    if start == -1 or end == -1 or end < start:
-        return None, ""
+    # Lenient fallback: scan the whole reply for a JSON proposal.
+    return _changes_from(_loads_json_blob(text)) or (None, "")
+
+
+def _loads_json_blob(text: str):
+    """Parse the first JSON object in ``text`` — a ```` ```json ```` fence if
+    present, else the outermost ``{...}``. Returns the parsed value or ``None``."""
+
+    fence = re.search(r"```(?:json)?\s*(\{.*\})\s*```", text, re.DOTALL)
+    candidate = fence.group(1) if fence else None
+    if candidate is None:
+        start, end = text.find("{"), text.rfind("}")
+        candidate = text[start : end + 1] if start != -1 and end > start else None
+    if not candidate:
+        return None
     try:
-        data = json.loads(after[start : end + 1])
+        return json.loads(candidate)
     except (ValueError, TypeError):
-        return None, ""
-    if not isinstance(data, dict) or not isinstance(data.get("changes"), list):
-        return None, ""
+        return None
+
+
+def _changes_from(data) -> tuple[list, str] | None:
+    """Build ``(changes, summary)`` from a parsed envelope or bare change dict."""
+
+    if not isinstance(data, dict):
+        return None
+    if isinstance(data.get("changes"), list):
+        raw, summary = data["changes"], str(data.get("summary", ""))
+    elif data.get("type") in ("document", "field"):
+        raw, summary = [data], ""  # a single bare change
+    else:
+        return None
     changes = [
-        c for c in data["changes"]
+        _normalize_change(c) for c in raw
         if isinstance(c, dict) and c.get("type") in ("document", "field")
     ]
-    return changes, str(data.get("summary", ""))
+    return (changes, summary) if changes else None
+
+
+def _normalize_change(change: dict) -> dict:
+    """Coerce a document change toward a valid kind (new/unknown kind → custom)."""
+
+    if change.get("type") != "document":
+        return change
+    from planner.models import Document
+
+    valid_kinds = {k for k, _ in Document.KIND_CHOICES}
+    if change.get("kind") not in valid_kinds:
+        change = {**change, "kind": Document.KIND_CUSTOM}
+    return change
+
+
+def _strip_json_blob(text: str) -> str:
+    """Remove a fenced/bare JSON object from a reply (lenient OSS path)."""
+
+    stripped = re.sub(r"```(?:json)?\s*\{.*\}\s*```", "", text, flags=re.DOTALL)
+    if stripped != text:
+        return stripped
+    start, end = text.find("{"), text.rfind("}")
+    if start != -1 and end > start:
+        return text[:start] + text[end + 1 :]
+    return text
