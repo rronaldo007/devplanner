@@ -538,15 +538,26 @@ def _assistant_turn_oss(
     choice = response.choices[0]
     text = (choice.message.content or "").strip()
     truncated = getattr(choice, "finish_reason", None) == "length"
+    last_user = next(
+        (m["content"] for m in reversed(messages) if m["role"] == "user"), ""
+    )
     # Lenient parsing: smaller models often drop the marker or wrap the JSON in
     # a code fence — accept those rather than losing the change.
-    return _finish_assistant_turn(text, language, truncated, lenient=True)
+    return _finish_assistant_turn(
+        text, language, truncated, lenient=True, user_request=last_user,
+    )
 
 
 # Concrete example shown only to OSS models (which follow the format less
 # reliably than Claude). Demonstrates the exact marker + envelope.
 _OSS_PROPOSAL_EXAMPLE = (
-    "\n\n# EXAMPLE of a proposal turn (follow this format EXACTLY)\n"
+    "\n\n# DELIVERING DOCUMENTS (read carefully)\n"
+    "When asked to write, generate, create or produce a document/file, you MUST "
+    "deliver it as a proposal using the marker + JSON below. NEVER paste the "
+    "document as plain chat and NEVER tell the user to 'copy the content' or "
+    "'save it as a .md file' — that does not create anything. Put the FULL "
+    "document in the proposal's `body`.\n"
+    "# EXAMPLE (follow this format EXACTLY)\n"
     "User: Add a custom doc called \"Security Plan\".\n"
     "Assistant:\n"
     "I've drafted a Security Plan.\n"
@@ -559,11 +570,14 @@ _OSS_PROPOSAL_EXAMPLE = (
 
 def _finish_assistant_turn(
     text: str, language: str, truncated: bool, *, lenient: bool = False,
+    user_request: str = "",
 ) -> dict:
     """Shared post-processing for a raw assistant response (both backends).
 
     ``lenient`` (OSS path) accepts a proposal that omits the marker / wraps the
-    JSON in a code fence, and strips that blob out of the shown reply.
+    JSON in a code fence, and — when the user asked to generate a document but
+    the model wrote it inline as prose — wraps that inline document into an
+    apply-able custom-document proposal.
     """
 
     proposals, summary = _parse_proposal(text, lenient=lenient)
@@ -573,6 +587,14 @@ def _finish_assistant_turn(
     elif lenient and proposals:
         # No marker, but we extracted a JSON proposal — strip it from the reply.
         reply = _strip_json_blob(text).strip()
+    elif lenient and not proposals and _is_file_request(user_request):
+        # The model wrote a document inline instead of proposing it — wrap it so
+        # it's actually apply-able (a common small-model failure).
+        wrapped = _wrap_inline_doc(text)
+        if wrapped:
+            proposals = [wrapped]
+            summary = f"Add “{wrapped['title']}”"
+            reply = "I've drafted the document — review and apply it below."
     if proposals and not reply:
         reply = summary or "Here's what I'd change — review and apply below."
     # If we ran out of room before a valid proposal closed, say so rather than
@@ -655,6 +677,42 @@ def _normalize_change(change: dict) -> dict:
     if change.get("kind") not in valid_kinds:
         change = {**change, "kind": Document.KIND_CUSTOM}
     return change
+
+
+_FILE_REQUEST_RE = re.compile(
+    r"\b(generate|create|make|write|draft|produce|add|build)\b.{0,40}"
+    r"\b(file|doc|document|spec|specification|plan|readme|backlog|prompt|report|md)\b",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _is_file_request(user_request: str) -> bool:
+    """Heuristic: did the user ask the assistant to produce a document/file?"""
+
+    return bool(user_request and _FILE_REQUEST_RE.search(user_request))
+
+
+def _wrap_inline_doc(text: str) -> dict | None:
+    """Wrap an inline markdown document (no proposal) as a custom-document change.
+
+    Returns ``None`` unless the reply contains a substantial markdown document
+    (a top-level heading + enough body), so ordinary chat answers aren't wrapped.
+    """
+
+    match = re.search(r"^#{1,2} +(.+)$", text, flags=re.MULTILINE)
+    if not match:
+        return None
+    body = text[match.start():].strip()
+    if len(body) < 200:  # too short to be a real document
+        return None
+    title = match.group(1).strip().lstrip("#").strip()[:200] or "Untitled document"
+    return {
+        "type": "document",
+        "kind": "custom",
+        "title": title,
+        "body": body,
+        "note": "Drafted by the assistant",
+    }
 
 
 def _strip_json_blob(text: str) -> str:

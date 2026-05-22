@@ -2343,3 +2343,45 @@ class LenientProposalParsingTests(TestCase):
         self.assertTrue(res["proposals"])
         self.assertNotIn("```", res["reply"])
         self.assertIn("I drafted it.", res["reply"])
+
+
+class InlineDocWrapTests(TestCase):
+    """OSS path wraps an inline-written document into an apply-able proposal."""
+
+    DOC = "# Deployment Plan\n\n## Hosting\n" + ("- step\n" * 60)
+
+    def test_is_file_request(self):
+        self.assertTrue(chat_mod._is_file_request("generate a file for the work you just did"))
+        self.assertTrue(chat_mod._is_file_request("create a deployment document"))
+        self.assertFalse(chat_mod._is_file_request("what stack am I using?"))
+
+    def test_wrap_inline_doc_requires_substantial_doc(self):
+        self.assertIsNone(chat_mod._wrap_inline_doc("Sure, here you go."))
+        wrapped = chat_mod._wrap_inline_doc("Here it is:\n\n" + self.DOC)
+        self.assertEqual(wrapped["kind"], "custom")
+        self.assertEqual(wrapped["title"], "Deployment Plan")
+        self.assertIn("## Hosting", wrapped["body"])
+
+    def test_finish_wraps_inline_doc_on_file_request(self):
+        text = "You can copy this and save it as plan.md:\n\n" + self.DOC
+        res = chat_mod._finish_assistant_turn(
+            text, "en", False, lenient=True,
+            user_request="generate a file for the work you just did",
+        )
+        self.assertEqual(len(res["proposals"]), 1)
+        self.assertEqual(res["proposals"][0]["title"], "Deployment Plan")
+        self.assertNotIn("save it as plan.md", res["reply"])
+
+    def test_finish_does_not_wrap_ordinary_answer(self):
+        # Long doc-like text but the user did NOT ask for a file → no wrap.
+        res = chat_mod._finish_assistant_turn(
+            self.DOC, "en", False, lenient=True, user_request="explain my hosting setup",
+        )
+        self.assertEqual(res["proposals"], [])
+
+    def test_claude_path_never_wraps(self):
+        # Non-lenient (Claude) must not wrap inline docs.
+        res = chat_mod._finish_assistant_turn(
+            self.DOC, "en", False, user_request="generate a file",
+        )
+        self.assertEqual(res["proposals"], [])
