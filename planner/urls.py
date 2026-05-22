@@ -90,6 +90,21 @@ urlpatterns = [
         views.project_assistant_apply,
         name="project_assistant_apply",
     ),
+    path(
+        "projects/<int:pk>/conversations/new/",
+        views.conversation_new,
+        name="conversation_new",
+    ),
+    path(
+        "projects/<int:pk>/conversations/<int:conv_pk>/rename/",
+        views.conversation_rename,
+        name="conversation_rename",
+    ),
+    path(
+        "projects/<int:pk>/conversations/<int:conv_pk>/delete/",
+        views.conversation_delete,
+        name="conversation_delete",
+    ),
     path("projects/<int:pk>/edit/", views.project_edit, name="project_edit"),
     path("projects/<int:pk>/delete/", views.project_delete, name="project_delete"),
     path(

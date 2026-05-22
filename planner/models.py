@@ -237,6 +237,31 @@ class Document(models.Model):
         return self.kind in self.DIAGRAM_KINDS
 
 
+class Conversation(models.Model):
+    """A named assistant thread within a project.
+
+    Lets a user keep separate topic threads — e.g. one for diagrams, one for
+    the database — instead of a single lumped-together assistant chat. Intake
+    chat does not use conversations (its messages have ``conversation=None``).
+    """
+
+    DEFAULT_TITLE = "New conversation"
+
+    project = models.ForeignKey(
+        Project, on_delete=models.CASCADE, related_name="conversations",
+    )
+    title = models.CharField(max_length=200, default=DEFAULT_TITLE)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        # Most recently active first — drives the sidebar order.
+        ordering = ["-updated_at", "-id"]
+
+    def __str__(self) -> str:
+        return f"{self.title} ({self.project_id})"
+
+
 class ChatMessage(models.Model):
     """One turn of a project chat, persisted so conversations survive reloads.
 
@@ -245,7 +270,8 @@ class ChatMessage(models.Model):
     * ``intake`` — the chat that builds a draft project's brief.
     * ``assistant`` — the ongoing project assistant that can edit info and
       documents after the project exists. Its assistant turns may carry
-      ``proposals`` (changes awaiting the user's confirmation).
+      ``proposals`` (changes awaiting the user's confirmation). Assistant
+      messages belong to a :class:`Conversation`.
     """
 
     ROLE_USER = "user"
@@ -276,6 +302,11 @@ class ChatMessage(models.Model):
 
     project = models.ForeignKey(
         Project, on_delete=models.CASCADE, related_name="chat_messages",
+    )
+    # Assistant messages belong to a Conversation; intake messages leave this null.
+    conversation = models.ForeignKey(
+        Conversation, on_delete=models.CASCADE, related_name="messages",
+        null=True, blank=True,
     )
     phase = models.CharField(max_length=16, choices=PHASE_CHOICES, default=PHASE_INTAKE)
     role = models.CharField(max_length=16, choices=ROLE_CHOICES)

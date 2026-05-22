@@ -30,7 +30,7 @@ from .forms import (
     CustomDocumentForm, DocumentEditForm, InterviewForm,
     NoteForm, RegisterForm, UserProfileForm,
 )
-from .models import ChatMessage, Document, Note, Project
+from .models import ChatMessage, Conversation, Document, Note, Project
 
 
 # ===========================================================================
@@ -294,9 +294,34 @@ def project_chat_message(request, pk):
 # ===========================================================================
 # Project assistant (post-creation chat that edits info + documents)
 # ===========================================================================
+def _assistant_redirect(project, conversation=None):
+    url = reverse("planner:project_assistant", args=[project.pk])
+    if conversation is not None:
+        url = f"{url}?c={conversation.pk}"
+    return HttpResponseRedirect(url)
+
+
+def _active_conversation(project, request) -> Conversation:
+    """Resolve the conversation to show: ``?c=<id>``, else most recent, else new."""
+
+    cid = request.GET.get("c")
+    conv = None
+    if cid:
+        conv = project.conversations.filter(pk=cid).first()
+    if conv is None:
+        conv = project.conversations.first()  # ordered by -updated_at
+    if conv is None:
+        conv = project.conversations.create(title="General")
+    return conv
+
+
 @login_required
 def project_assistant(request, pk):
-    """Chat with an assistant that knows the whole project and its documents."""
+    """Chat with an assistant that knows the whole project and its documents.
+
+    Assistant chat is organised into named conversations (threads). The active
+    one is chosen via ``?c=<id>`` (default: most recent).
+    """
 
     project = _owned_project(request, pk)
     if project.is_draft:
@@ -308,10 +333,11 @@ def project_assistant(request, pk):
         )
         return HttpResponseRedirect(reverse("planner:project_detail", args=[project.pk]))
 
-    msgs = project.chat_messages.filter(phase=ChatMessage.PHASE_ASSISTANT)
-    if not msgs.exists():
+    conversation = _active_conversation(project, request)
+    if not conversation.messages.exists():
         ChatMessage.objects.create(
             project=project,
+            conversation=conversation,
             phase=ChatMessage.PHASE_ASSISTANT,
             role=ChatMessage.ROLE_ASSISTANT,
             content=chat.assistant_opening_message(project.language),
@@ -321,11 +347,41 @@ def project_assistant(request, pk):
         "planner/dashboard/assistant.html",
         {
             "project": project,
-            "chat_messages": project.chat_messages.filter(
-                phase=ChatMessage.PHASE_ASSISTANT
-            ),
+            "conversations": project.conversations.all(),
+            "active_conversation": conversation,
+            "chat_messages": conversation.messages.all(),
         },
     )
+
+
+@require_http_methods(["POST"])
+@login_required
+def conversation_new(request, pk):
+    project = _owned_project(request, pk)
+    conversation = project.conversations.create(title=Conversation.DEFAULT_TITLE)
+    return _assistant_redirect(project, conversation)
+
+
+@require_http_methods(["POST"])
+@login_required
+def conversation_rename(request, pk, conv_pk):
+    project = _owned_project(request, pk)
+    conversation = get_object_or_404(Conversation, pk=conv_pk, project=project)
+    title = (request.POST.get("title") or "").strip()
+    if title:
+        conversation.title = title[:200]
+        conversation.save(update_fields=["title", "updated_at"])
+    return _assistant_redirect(project, conversation)
+
+
+@require_http_methods(["POST"])
+@login_required
+def conversation_delete(request, pk, conv_pk):
+    project = _owned_project(request, pk)
+    conversation = get_object_or_404(Conversation, pk=conv_pk, project=project)
+    conversation.delete()
+    messages.success(request, "Conversation deleted.")
+    return _assistant_redirect(project)
 
 
 @require_http_methods(["POST"])
@@ -346,18 +402,27 @@ def project_assistant_message(request, pk):
     try:
         payload = json.loads(request.body or "{}")
         message = (payload.get("message") or "").strip()
+        conversation_id = payload.get("conversation_id")
     except (ValueError, TypeError):
         return JsonResponse({"error": "bad_request"}, status=400)
     if not message:
         return JsonResponse({"error": "empty_message"}, status=400)
 
+    conversation = project.conversations.filter(pk=conversation_id).first()
+    if conversation is None:
+        return JsonResponse({"error": "no_conversation"}, status=404)
+
     ChatMessage.objects.create(
-        project=project, phase=ChatMessage.PHASE_ASSISTANT,
+        project=project, conversation=conversation,
+        phase=ChatMessage.PHASE_ASSISTANT,
         role=ChatMessage.ROLE_USER, content=message,
     )
+    # Name an untitled thread from its first user message (e.g. "diagrams").
+    if conversation.title == Conversation.DEFAULT_TITLE:
+        conversation.title = chat.derive_title(message)
     history = [
         {"role": m.role, "content": m.content}
-        for m in project.chat_messages.filter(phase=ChatMessage.PHASE_ASSISTANT)
+        for m in conversation.messages.all()
     ]
     context = chat.build_project_context(project)
     try:
@@ -374,18 +439,22 @@ def project_assistant_message(request, pk):
     _clear_ai_status(request)
     proposals = result["proposals"]
     msg = ChatMessage.objects.create(
-        project=project, phase=ChatMessage.PHASE_ASSISTANT,
+        project=project, conversation=conversation,
+        phase=ChatMessage.PHASE_ASSISTANT,
         role=ChatMessage.ROLE_ASSISTANT, content=result["reply"],
         proposals=proposals,
         proposal_status=(
             ChatMessage.PROPOSAL_PENDING if proposals else ChatMessage.PROPOSAL_NONE
         ),
     )
+    # Persist any new auto-title and bump updated_at (floats to top of list).
+    conversation.save(update_fields=["title", "updated_at"])
     return JsonResponse({
         "reply": result["reply"],
         "message_id": msg.pk,
         "has_proposal": bool(proposals),
         "proposals": _proposals_summary(proposals),
+        "conversation_title": conversation.title,
     })
 
 
