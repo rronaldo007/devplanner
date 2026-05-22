@@ -1594,3 +1594,57 @@ class DocumentCategoryTests(TestCase):
         self.assertEqual(labels, ["Business", "System Design", "Data Design", "App Design"])
         self.assertContains(resp, "System Design")
         self.assertContains(resp, "Data Design")
+
+
+# ===========================================================================
+# Password reset
+# ===========================================================================
+import re as _re  # noqa: E402
+from django.core import mail  # noqa: E402
+
+
+class PasswordResetTests(TestCase):
+    def _user_with_email(self, username="resetme", email="reset@example.com"):
+        user = _make_user(username=username)
+        user.email = email
+        user.save()
+        return user
+
+    def test_login_page_links_to_reset(self):
+        resp = self.client.get(reverse("planner:login"))
+        self.assertContains(resp, reverse("planner:password_reset"))
+
+    def test_reset_request_sends_email(self):
+        self._user_with_email()
+        resp = self.client.post(
+            reverse("planner:password_reset"), {"email": "reset@example.com"}
+        )
+        self.assertRedirects(resp, reverse("planner:password_reset_done"))
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(mail.outbox[0].subject, "Reset your DevPlanner password")
+        self.assertIn("/reset/", mail.outbox[0].body)
+
+    def test_full_reset_flow_lets_user_log_in(self):
+        self._user_with_email()
+        self.client.post(reverse("planner:password_reset"), {"email": "reset@example.com"})
+        link = _re.search(r"/reset/[\w-]+/[\w-]+/", mail.outbox[0].body).group(0)
+
+        # GET the token link → redirects to the session-based set-password form.
+        resp = self.client.get(link)
+        self.assertEqual(resp.status_code, 302)
+        set_url = resp.url
+
+        new_password = "n3w-Secur3-pass"
+        resp = self.client.post(
+            set_url,
+            {"new_password1": new_password, "new_password2": new_password},
+        )
+        self.assertRedirects(resp, reverse("planner:password_reset_complete"))
+        self.assertTrue(self.client.login(username="resetme", password=new_password))
+
+    def test_unknown_email_still_succeeds_but_sends_nothing(self):
+        resp = self.client.post(
+            reverse("planner:password_reset"), {"email": "nobody@example.com"}
+        )
+        self.assertRedirects(resp, reverse("planner:password_reset_done"))
+        self.assertEqual(len(mail.outbox), 0)
