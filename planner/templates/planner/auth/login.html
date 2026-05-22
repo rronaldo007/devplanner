@@ -26,6 +26,9 @@
       <label for="{{ form.password.id_for_label }}">Password</label>
       {{ form.password }}
       {% if form.password.errors %}<div class="errors">{{ form.password.errors }}</div>{% endif %}
+      <p class="mt-1 text-right text-xs">
+        <a href="{% url 'planner:password_reset' %}" class="text-indigo-400 hover:underline">Forgot your password?</a>
+      </p>
     </div>
 
     <button type="submit" class="w-full inline-flex justify-center items-center rounded-md bg-indigo-600 px-4 py-2.5 font-semibold text-white hover:bg-indigo-500">

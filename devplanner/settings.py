@@ -188,6 +188,30 @@ LOGOUT_REDIRECT_URL = "planner:home"
 
 
 # ---------------------------------------------------------------------------
+# Email (used by the password-reset flow)
+# ---------------------------------------------------------------------------
+# In DEBUG, print emails to the console (no SMTP needed for local dev). In
+# production, configure SMTP via env. Reset links expire after this many
+# seconds (Django default is 3 days).
+if DEBUG:
+    EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
+else:
+    EMAIL_BACKEND = os.environ.get(
+        "DJANGO_EMAIL_BACKEND", "django.core.mail.backends.smtp.EmailBackend"
+    )
+    EMAIL_HOST = os.environ.get("DJANGO_EMAIL_HOST", "")
+    EMAIL_PORT = int(os.environ.get("DJANGO_EMAIL_PORT", "587"))
+    EMAIL_HOST_USER = os.environ.get("DJANGO_EMAIL_HOST_USER", "")
+    EMAIL_HOST_PASSWORD = os.environ.get("DJANGO_EMAIL_HOST_PASSWORD", "")
+    EMAIL_USE_TLS = _env_bool("DJANGO_EMAIL_USE_TLS", True)
+
+DEFAULT_FROM_EMAIL = os.environ.get(
+    "DJANGO_DEFAULT_FROM_EMAIL", "DevPlanner <no-reply@devplanner.local>"
+)
+PASSWORD_RESET_TIMEOUT = int(os.environ.get("DJANGO_PASSWORD_RESET_TIMEOUT", str(60 * 60 * 24 * 3)))
+
+
+# ---------------------------------------------------------------------------
 # Production hardening (only when DEBUG is off)
 # ---------------------------------------------------------------------------
 if not DEBUG:
