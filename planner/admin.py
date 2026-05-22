@@ -12,7 +12,7 @@ from django.contrib.auth.admin import UserAdmin as DjangoUserAdmin
 from django.contrib.auth.models import Group
 from unfold.admin import ModelAdmin, TabularInline
 
-from .models import ChatMessage, Document, Note, Project, UserProfile
+from .models import ChatMessage, Conversation, Document, Note, Project, UserProfile
 
 User = get_user_model()
 
@@ -112,15 +112,30 @@ class DocumentAdmin(ModelAdmin):
     readonly_fields = ("created_at", "updated_at")
 
 
+@admin.register(Conversation)
+class ConversationAdmin(ModelAdmin):
+    list_display = ("title", "project", "message_count", "updated_at")
+    list_filter = ("updated_at",)
+    list_filter_submit = True
+    search_fields = ("title", "project__name")
+    list_select_related = ("project",)
+    readonly_fields = ("created_at", "updated_at")
+
+    @admin.display(description="Messages")
+    def message_count(self, obj):
+        return obj.messages.count()
+
+
 @admin.register(ChatMessage)
 class ChatMessageAdmin(ModelAdmin):
     list_display = (
-        "project", "phase", "role", "short_content", "proposal_status", "created_at",
+        "project", "conversation", "phase", "role", "short_content",
+        "proposal_status", "created_at",
     )
     list_filter = ("phase", "role", "proposal_status")
     list_filter_submit = True
     search_fields = ("project__name", "content")
-    list_select_related = ("project",)
+    list_select_related = ("project", "conversation")
     readonly_fields = ("created_at",)
 
     @admin.display(description="Content")
