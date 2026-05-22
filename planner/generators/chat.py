@@ -218,13 +218,17 @@ def is_available(user: "AbstractBaseUser") -> bool:
 
 
 def assistant_available(user: "AbstractBaseUser") -> bool:
-    """The project assistant can run if Claude is available OR OSS is configured."""
+    """The project assistant can run if Claude is available OR an OSS endpoint exists.
+
+    OSS only needs an endpoint here (not a default model) — the model is chosen
+    per conversation.
+    """
 
     if is_available(user):
         return True
     from . import oss
 
-    return oss.is_configured()
+    return oss.has_endpoint()
 
 
 def available_models() -> dict:
