@@ -12,7 +12,7 @@ from django.contrib.auth.admin import UserAdmin as DjangoUserAdmin
 from django.contrib.auth.models import Group
 from unfold.admin import ModelAdmin, TabularInline
 
-from .models import ChatMessage, Document, Project, UserProfile
+from .models import ChatMessage, Document, Note, Project, UserProfile
 
 User = get_user_model()
 
@@ -127,3 +127,12 @@ class ChatMessageAdmin(ModelAdmin):
     def short_content(self, obj):
         text = " ".join((obj.content or "").split())
         return (text[:80] + "…") if len(text) > 80 else text
+
+
+@admin.register(Note)
+class NoteAdmin(ModelAdmin):
+    list_display = ("display_title", "project", "updated_at")
+    list_filter_submit = True
+    search_fields = ("title", "body", "project__name")
+    list_select_related = ("project",)
+    readonly_fields = ("created_at", "updated_at")

@@ -252,3 +252,34 @@ class ChatMessage(models.Model):
     @property
     def has_pending_proposal(self) -> bool:
         return self.proposal_status == self.PROPOSAL_PENDING
+
+
+class Note(models.Model):
+    """A free-form, plain-text note attached to a project.
+
+    Ownership flows through the project (``note.project.owner``); views always
+    scope by the requesting user's projects.
+    """
+
+    project = models.ForeignKey(
+        Project, on_delete=models.CASCADE, related_name="notes",
+    )
+    title = models.CharField(max_length=200, blank=True)
+    body = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-updated_at"]
+
+    def __str__(self) -> str:
+        return self.title or f"Note #{self.pk}"
+
+    @property
+    def display_title(self) -> str:
+        """Title, or a short slug of the body when untitled."""
+
+        if self.title:
+            return self.title
+        text = " ".join((self.body or "").split())
+        return (text[:50] + "…") if len(text) > 50 else (text or "Untitled note")

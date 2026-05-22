@@ -89,4 +89,17 @@ urlpatterns = [
         views.document_drawio,
         name="document_drawio",
     ),
+
+    # --- Notes ----------------------------------------------------------
+    path("projects/<int:pk>/notes/", views.project_notes, name="project_notes"),
+    path(
+        "projects/<int:pk>/notes/<int:note_pk>/edit/",
+        views.note_edit,
+        name="note_edit",
+    ),
+    path(
+        "projects/<int:pk>/notes/<int:note_pk>/delete/",
+        views.note_delete,
+        name="note_delete",
+    ),
 ]
