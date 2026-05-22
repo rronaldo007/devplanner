@@ -7,6 +7,8 @@ entrypoints:
   docs + three Mermaid diagrams) for a project.
 * :func:`generate_custom` — produce a single custom document from a
   user-supplied prompt using the project as context.
+* :func:`classify_document` — assign a spec-pack category to a document
+  (Claude when available, deterministic keyword scoring otherwise).
 * :func:`regenerate` — refresh the body of an existing :class:`Document`.
 * :func:`sync_default_documents` — persist / refresh all default docs as
   ``Document`` rows on a project.
@@ -19,6 +21,7 @@ from __future__ import annotations
 
 from .engine import (
     DEFAULT_TITLES,
+    classify_document,
     generate_all,
     generate_custom,
     regenerate,
@@ -27,6 +30,7 @@ from .engine import (
 
 __all__ = [
     "DEFAULT_TITLES",
+    "classify_document",
     "generate_all",
     "generate_custom",
     "regenerate",

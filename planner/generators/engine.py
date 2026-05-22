@@ -120,6 +120,34 @@ def generate_custom(project: "Project", title: str, prompt: str) -> dict:
     }
 
 
+def classify_document(
+    project: "Project", *, title: str, body: str, force_engine: str | None = None
+) -> dict:
+    """Classify a custom document into one of the spec-pack categories.
+
+    Uses Claude when available, falling back to deterministic keyword scoring
+    (which also runs when Claude errors or returns an unknown slug). Returns
+    ``{"category", "engine"}`` plus an optional ``_claude_error``.
+    """
+
+    from . import classify
+
+    engine = _select_engine(project, force_engine)
+    if engine == "claude":
+        try:
+            category = classify.classify_claude(
+                title, body, api_key=_api_key_for(project)
+            )
+            return {"category": category, "engine": "claude"}
+        except Exception as exc:
+            return {
+                "category": classify.classify_keyword(title, body),
+                "engine": "keyword",
+                "_claude_error": str(exc),
+            }
+    return {"category": classify.classify_keyword(title, body), "engine": "keyword"}
+
+
 def regenerate(document: "Document", *, force_engine: str | None = None) -> str:
     """Refresh ``document.body`` from its parent project.
 
