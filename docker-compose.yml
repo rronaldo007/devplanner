@@ -17,7 +17,7 @@ services:
       # Optional: drop in a Claude key here to enable Claude for any user
       # who hasn't set one in Settings (per-user keys always win).
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-opus-4-7}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-sonnet-4-6}
     volumes:
       # Persists SQLite across container restarts.
       - devplanner-data:/app/data
