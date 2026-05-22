@@ -2079,3 +2079,32 @@ class ConversationTests(TestCase):
         titles = [c.title for c in resp.context["conversations"]]
         self.assertIn("Mine", titles)
         self.assertNotIn("Theirs", titles)
+
+
+# ===========================================================================
+# Settings: API key handling (security)
+# ===========================================================================
+class SettingsApiKeyTests(TestCase):
+    def setUp(self):
+        self.user = _make_user(api_key="sk-ant-secret")
+        self.client.force_login(self.user)
+        self.url = reverse("planner:settings")
+
+    def test_key_not_reflected_into_page_html(self):
+        resp = self.client.get(self.url)
+        self.assertEqual(resp.status_code, 200)
+        self.assertNotContains(resp, "sk-ant-secret")
+
+    def test_blank_submit_keeps_existing_key(self):
+        resp = self.client.post(self.url, {"anthropic_api_key": "", "default_language": "en"})
+        self.assertEqual(resp.status_code, 302)
+        self.user.profile.refresh_from_db()
+        self.assertEqual(self.user.profile.anthropic_api_key, "sk-ant-secret")
+
+    def test_new_key_replaces_existing(self):
+        resp = self.client.post(
+            self.url, {"anthropic_api_key": "sk-ant-new", "default_language": "en"}
+        )
+        self.assertEqual(resp.status_code, 302)
+        self.user.profile.refresh_from_db()
+        self.assertEqual(self.user.profile.anthropic_api_key, "sk-ant-new")

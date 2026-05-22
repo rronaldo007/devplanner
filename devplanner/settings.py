@@ -225,6 +225,9 @@ if not DEBUG:
     SESSION_COOKIE_SECURE = _env_bool("DJANGO_SECURE_COOKIES", True)
     CSRF_COOKIE_SECURE = _env_bool("DJANGO_SECURE_COOKIES", True)
     SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+    # Force HTTPS by default in production (override with DJANGO_SSL_REDIRECT=0
+    # for a deploy that terminates TLS elsewhere and can't set the proxy header).
+    SECURE_SSL_REDIRECT = _env_bool("DJANGO_SSL_REDIRECT", True)
     SECURE_HSTS_SECONDS = int(os.environ.get("DJANGO_HSTS_SECONDS", "0"))
     if SECURE_HSTS_SECONDS:
         SECURE_HSTS_INCLUDE_SUBDOMAINS = True
