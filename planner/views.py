@@ -464,13 +464,21 @@ def project_assistant_message(request, pk):
     if conversation.provider == Conversation.PROVIDER_OSS:
         from .generators import oss
 
-        if not oss.is_configured():
+        cfg = oss.config()
+        chosen_model = conversation.model or cfg["model"]
+        if not cfg["base_url"]:
             return JsonResponse({
                 "error": "oss_unconfigured",
-                "detail": "This conversation uses a local/OSS model, but no OSS "
-                          "endpoint is configured (set OSS_BASE_URL / OSS_MODEL).",
+                "detail": "No local/OSS endpoint is configured. Set OSS_BASE_URL "
+                          "(or OLLAMA_HOST) in the server environment.",
             }, status=409)
-        turn_kwargs = {"provider": "oss", "model": conversation.model or None}
+        if not chosen_model:
+            return JsonResponse({
+                "error": "oss_no_model",
+                "detail": "Pick a local/OSS model from the AI model dropdown for "
+                          "this conversation.",
+            }, status=409)
+        turn_kwargs = {"provider": "oss", "model": chosen_model}
     else:
         if not chat.is_available(request.user):
             return JsonResponse({

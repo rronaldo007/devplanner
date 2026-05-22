@@ -664,7 +664,9 @@ class ProjectAssistantTests(TestCase):
         project = _make_project(nokey)
         self.client.force_login(nokey)
         _install_anthropic_stub("x")  # installed, but user has no key
-        resp = self.client.get(reverse("planner:project_assistant", args=[project.pk]))
+        # With no Claude key AND no OSS endpoint, the assistant is unavailable.
+        with mock.patch.dict(os.environ, {"OSS_BASE_URL": "", "OLLAMA_HOST": ""}):
+            resp = self.client.get(reverse("planner:project_assistant", args=[project.pk]))
         self.assertRedirects(resp, reverse("planner:project_detail", args=[project.pk]))
 
     def test_plain_reply_has_no_proposal(self):
@@ -2262,7 +2264,8 @@ class ConversationAiOptionsTests(TestCase):
         project = _make_project(keyed)
         conv = project.conversations.create(title="t", provider="oss")
         _install_anthropic_stub("x")
-        with mock.patch.dict(os.environ, {"OSS_BASE_URL": "", "OSS_MODEL": ""}):
+        # Clear OLLAMA_HOST too — it would otherwise derive a base_url (fallback).
+        with mock.patch.dict(os.environ, {"OSS_BASE_URL": "", "OSS_MODEL": "", "OLLAMA_HOST": ""}):
             resp = self.client.post(
                 reverse("planner:project_assistant_message", args=[project.pk]),
                 data=json.dumps({"message": "hi", "conversation_id": conv.pk}),
@@ -2290,3 +2293,19 @@ class ConversationAiOptionsTests(TestCase):
     def test_assistant_available_helper(self):
         # No Claude key, but OSS configured.
         self.assertTrue(chat_mod.assistant_available(self.user))
+
+
+class OssOllamaHostFallbackTests(TestCase):
+    """oss.config() derives base_url from OLLAMA_HOST when OSS_BASE_URL is unset."""
+
+    def test_derives_base_url_from_ollama_host(self):
+        from planner.generators import oss
+        env = {"OSS_BASE_URL": "", "OLLAMA_HOST": "http://100.101.186.97:11434"}
+        with mock.patch.dict(os.environ, env):
+            self.assertEqual(oss.config()["base_url"], "http://100.101.186.97:11434/v1")
+
+    def test_oss_base_url_takes_precedence(self):
+        from planner.generators import oss
+        env = {"OSS_BASE_URL": "http://explicit:1234/v1", "OLLAMA_HOST": "http://other:11434"}
+        with mock.patch.dict(os.environ, env):
+            self.assertEqual(oss.config()["base_url"], "http://explicit:1234/v1")

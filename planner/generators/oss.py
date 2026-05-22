@@ -35,19 +35,50 @@ MAX_TOKENS = int(os.environ.get("OSS_MAX_TOKENS", "8000"))
 CLASSIFY_MAX_TOKENS = int(os.environ.get("OSS_CLASSIFY_MAX_TOKENS", "16"))
 
 
+def _base_url() -> str:
+    """Resolve the OSS endpoint: OSS_BASE_URL, else derive from Ollama's OLLAMA_HOST.
+
+    Many setups already export ``OLLAMA_HOST=http://host:11434`` (Ollama's own
+    var). We reuse it — appending the OpenAI-compatible ``/v1`` path — so the
+    OSS engine works without a second env var.
+    """
+
+    base = os.environ.get("OSS_BASE_URL", "").strip()
+    if base:
+        return base
+    ollama_host = os.environ.get("OLLAMA_HOST", "").strip()
+    if ollama_host:
+        return ollama_host.rstrip("/") + "/v1"
+    return ""
+
+
 def config() -> dict[str, str]:
     """Read the OSS endpoint config from the environment (live, for testability)."""
 
     return {
-        "base_url": os.environ.get("OSS_BASE_URL", "").strip(),
+        "base_url": _base_url(),
         "model": os.environ.get("OSS_MODEL", "").strip(),
         # Ollama ignores the key but the SDK requires a non-empty value.
         "api_key": os.environ.get("OSS_API_KEY", "").strip() or "ollama",
     }
 
 
+def has_endpoint() -> bool:
+    """True when an OSS endpoint is reachable-in-principle (base_url resolved).
+
+    Enough to *list* models and to run a call where the model is supplied by the
+    caller (e.g. a per-conversation choice). Does not require OSS_MODEL.
+    """
+
+    return bool(config()["base_url"])
+
+
 def is_configured() -> bool:
-    """True when enough config is present to attempt an OSS call (base_url + model)."""
+    """True when OSS can run with no per-call model (base_url + default model).
+
+    Used by the document-generation fallback chain, where the model comes from
+    OSS_MODEL rather than per-conversation.
+    """
 
     cfg = config()
     return bool(cfg["base_url"] and cfg["model"])
