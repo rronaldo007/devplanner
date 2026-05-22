@@ -45,7 +45,7 @@ class UserProfileForm(forms.ModelForm):
 
     class Meta:
         model = UserProfile
-        fields = ("anthropic_api_key", "default_language")
+        fields = ("anthropic_api_key", "default_language", "ai_provider", "oss_model")
         widgets = {
             # render_value is intentionally OFF: never reflect the stored secret
             # back into the page HTML. The field renders empty; an empty submit
@@ -53,6 +53,15 @@ class UserProfileForm(forms.ModelForm):
             "anthropic_api_key": forms.PasswordInput(
                 attrs={"placeholder": "sk-ant-… (leave blank to keep current)"},
             ),
+            # Free-text + a datalist of live models (rendered in the template),
+            # so it works even when the OSS endpoint is offline.
+            "oss_model": forms.TextInput(
+                attrs={"list": "oss-models", "placeholder": "e.g. gemma4:26b"},
+            ),
+        }
+        labels = {
+            "ai_provider": "Generate documents with",
+            "oss_model": "Local model (for generation)",
         }
 
     def clean_anthropic_api_key(self):

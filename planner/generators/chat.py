@@ -218,13 +218,17 @@ def is_available(user: "AbstractBaseUser") -> bool:
 
 
 def assistant_available(user: "AbstractBaseUser") -> bool:
-    """The project assistant can run if Claude is available OR OSS is configured."""
+    """The project assistant can run if Claude is available OR an OSS endpoint exists.
+
+    OSS only needs an endpoint here (not a default model) — the model is chosen
+    per conversation.
+    """
 
     if is_available(user):
         return True
     from . import oss
 
-    return oss.is_configured()
+    return oss.has_endpoint()
 
 
 def available_models() -> dict:
@@ -514,6 +518,25 @@ def _assistant_turn_oss(
     strict ``===PROPOSAL===`` JSON, but if one is emitted it parses the same way.
     """
 
+    last_user = next(
+        (m["content"] for m in reversed(messages) if m["role"] == "user"), ""
+    )
+    # "Save / generate a file for the work you just did / this / the above":
+    # capture the PREVIOUS assistant message verbatim instead of asking the
+    # model to reproduce it (small models drift and write something unrelated).
+    if _is_save_previous_request(last_user):
+        prev = next(
+            (m["content"] for m in reversed(messages) if m["role"] == "assistant"), ""
+        )
+        wrapped = _wrap_inline_doc(prev, from_heading=False) if prev else None
+        if wrapped:
+            return {
+                "reply": "I've saved your previous output as a document — review "
+                         "and apply it below.",
+                "proposals": [wrapped],
+                "summary": f"Add “{wrapped['title']}”",
+            }
+
     from openai import OpenAI
 
     from . import oss
@@ -521,6 +544,7 @@ def _assistant_turn_oss(
     cfg = oss.config()
     system_text = (
         _assistant_system_prompt(language_name, web_search=False)
+        + _OSS_PROPOSAL_EXAMPLE
         + "\n\n# CURRENT PROJECT CONTEXT\n"
         + context
     )
@@ -533,16 +557,60 @@ def _assistant_turn_oss(
     choice = response.choices[0]
     text = (choice.message.content or "").strip()
     truncated = getattr(choice, "finish_reason", None) == "length"
-    return _finish_assistant_turn(text, language, truncated)
+    # Lenient parsing: smaller models often drop the marker or wrap the JSON in
+    # a code fence — accept those rather than losing the change.
+    return _finish_assistant_turn(
+        text, language, truncated, lenient=True, user_request=last_user,
+    )
 
 
-def _finish_assistant_turn(text: str, language: str, truncated: bool) -> dict:
-    """Shared post-processing for a raw assistant response (both backends)."""
+# Concrete example shown only to OSS models (which follow the format less
+# reliably than Claude). Demonstrates the exact marker + envelope.
+_OSS_PROPOSAL_EXAMPLE = (
+    "\n\n# DELIVERING DOCUMENTS (read carefully)\n"
+    "When asked to write, generate, create or produce a document/file, you MUST "
+    "deliver it as a proposal using the marker + JSON below. NEVER paste the "
+    "document as plain chat and NEVER tell the user to 'copy the content' or "
+    "'save it as a .md file' — that does not create anything. Put the FULL "
+    "document in the proposal's `body`.\n"
+    "# EXAMPLE (follow this format EXACTLY)\n"
+    "User: Add a custom doc called \"Security Plan\".\n"
+    "Assistant:\n"
+    "I've drafted a Security Plan.\n"
+    + PROPOSAL_MARKER + "\n"
+    '{"summary": "Add a Security Plan document", "changes": [{"type": "document", '
+    '"kind": "custom", "title": "Security Plan", "body": "# Security Plan\\n\\n'
+    '## Authentication\\n- ...\\n"}]}'
+)
 
-    proposals, summary = _parse_proposal(text)
+
+def _finish_assistant_turn(
+    text: str, language: str, truncated: bool, *, lenient: bool = False,
+    user_request: str = "",
+) -> dict:
+    """Shared post-processing for a raw assistant response (both backends).
+
+    ``lenient`` (OSS path) accepts a proposal that omits the marker / wraps the
+    JSON in a code fence, and — when the user asked to generate a document but
+    the model wrote it inline as prose — wraps that inline document into an
+    apply-able custom-document proposal.
+    """
+
+    proposals, summary = _parse_proposal(text, lenient=lenient)
     reply = text
     if PROPOSAL_MARKER in text:
         reply = text.split(PROPOSAL_MARKER, 1)[0].strip()
+    elif lenient and proposals:
+        # No marker, but we extracted a JSON proposal — strip it from the reply.
+        reply = _strip_json_blob(text).strip()
+    elif lenient and not proposals and _is_file_request(user_request):
+        # The model wrote a document inline instead of proposing it — wrap it so
+        # it's actually apply-able (a common small-model failure).
+        wrapped = _wrap_inline_doc(text)
+        if wrapped:
+            proposals = [wrapped]
+            summary = f"Add “{wrapped['title']}”"
+            reply = "I've drafted the document — review and apply it below."
     if proposals and not reply:
         reply = summary or "Here's what I'd change — review and apply below."
     # If we ran out of room before a valid proposal closed, say so rather than
@@ -559,26 +627,141 @@ def _finish_assistant_turn(text: str, language: str, truncated: bool) -> dict:
     return {"reply": reply, "proposals": proposals or [], "summary": summary}
 
 
-def _parse_proposal(text: str) -> tuple[list | None, str]:
-    """Extract ``(changes, summary)`` from a proposal marker, if present/valid."""
+def _parse_proposal(text: str, *, lenient: bool = False) -> tuple[list | None, str]:
+    """Extract ``(changes, summary)`` from a proposal.
 
-    if PROPOSAL_MARKER not in text:
+    Strict (default): requires the ``===PROPOSAL===`` marker. ``lenient`` (OSS
+    path) additionally accepts an unmarked proposal — a fenced/bare JSON object
+    that is either the ``{"summary","changes":[...]}`` envelope or a single
+    bare change dict — since small models often drop the marker.
+    """
+
+    if PROPOSAL_MARKER in text:
+        after = text.split(PROPOSAL_MARKER, 1)[1].strip()
+        result = _changes_from(_loads_json_blob(after))
+        if result is not None or not lenient:
+            return result if result is not None else (None, "")
+    elif not lenient:
         return None, ""
-    after = text.split(PROPOSAL_MARKER, 1)[1].strip()
-    if after.startswith("```"):
-        after = re.sub(r"^```[a-zA-Z]*\n?|\n?```$", "", after.strip())
-    start = after.find("{")
-    end = after.rfind("}")
-    if start == -1 or end == -1 or end < start:
-        return None, ""
+    # Lenient fallback: scan the whole reply for a JSON proposal.
+    return _changes_from(_loads_json_blob(text)) or (None, "")
+
+
+def _loads_json_blob(text: str):
+    """Parse the first JSON object in ``text`` — a ```` ```json ```` fence if
+    present, else the outermost ``{...}``. Returns the parsed value or ``None``."""
+
+    fence = re.search(r"```(?:json)?\s*(\{.*\})\s*```", text, re.DOTALL)
+    candidate = fence.group(1) if fence else None
+    if candidate is None:
+        start, end = text.find("{"), text.rfind("}")
+        candidate = text[start : end + 1] if start != -1 and end > start else None
+    if not candidate:
+        return None
     try:
-        data = json.loads(after[start : end + 1])
+        return json.loads(candidate)
     except (ValueError, TypeError):
-        return None, ""
-    if not isinstance(data, dict) or not isinstance(data.get("changes"), list):
-        return None, ""
+        return None
+
+
+def _changes_from(data) -> tuple[list, str] | None:
+    """Build ``(changes, summary)`` from a parsed envelope or bare change dict."""
+
+    if not isinstance(data, dict):
+        return None
+    if isinstance(data.get("changes"), list):
+        raw, summary = data["changes"], str(data.get("summary", ""))
+    elif data.get("type") in ("document", "field"):
+        raw, summary = [data], ""  # a single bare change
+    else:
+        return None
     changes = [
-        c for c in data["changes"]
+        _normalize_change(c) for c in raw
         if isinstance(c, dict) and c.get("type") in ("document", "field")
     ]
-    return changes, str(data.get("summary", ""))
+    return (changes, summary) if changes else None
+
+
+def _normalize_change(change: dict) -> dict:
+    """Coerce a document change toward a valid kind (new/unknown kind → custom)."""
+
+    if change.get("type") != "document":
+        return change
+    from planner.models import Document
+
+    valid_kinds = {k for k, _ in Document.KIND_CHOICES}
+    if change.get("kind") not in valid_kinds:
+        change = {**change, "kind": Document.KIND_CUSTOM}
+    return change
+
+
+_FILE_REQUEST_RE = re.compile(
+    r"\b(generate|create|make|write|draft|produce|add|build)\b.{0,40}"
+    r"\b(file|doc|document|spec|specification|plan|readme|backlog|prompt|report|md)\b",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _is_file_request(user_request: str) -> bool:
+    """Heuristic: did the user ask the assistant to produce a document/file?"""
+
+    return bool(user_request and _FILE_REQUEST_RE.search(user_request))
+
+
+_SAVE_PREVIOUS_RE = re.compile(
+    r"\b(save|generate|create|make|export|turn|store)\b.{0,60}"
+    r"(this|that|\bit\b|the above|above|previous|the work you just|"
+    r"you just (did|made|wrote|created|generated)|the (document|diagram|content|file) you)",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _is_save_previous_request(user_request: str) -> bool:
+    """Heuristic: did the user ask to save the PREVIOUS assistant output?"""
+
+    return bool(user_request and _SAVE_PREVIOUS_RE.search(user_request))
+
+
+def _wrap_inline_doc(
+    text: str, *, from_heading: bool = True, default_title: str = "Saved from chat",
+) -> dict | None:
+    """Wrap markdown text as a custom-document change.
+
+    ``from_heading`` (default) takes the body from the first heading onward and
+    titles it from that heading — used to extract a doc the model wrote inline,
+    dropping any lead-in prose; returns ``None`` if there's no heading. When
+    ``from_heading`` is False the whole ``text`` is the body (used for
+    "save the previous message" verbatim). Returns ``None`` if too short.
+    """
+
+    match = re.search(r"^#{1,3} +(.+)$", text, flags=re.MULTILINE)
+    if from_heading:
+        if not match:
+            return None
+        body = text[match.start():].strip()
+    else:
+        body = text.strip()
+    if len(body) < 200:  # too short to be a real document
+        return None
+    title = (
+        match.group(1).strip().lstrip("#").strip()[:200] if match else default_title
+    ) or default_title
+    return {
+        "type": "document",
+        "kind": "custom",
+        "title": title,
+        "body": body,
+        "note": "Drafted by the assistant",
+    }
+
+
+def _strip_json_blob(text: str) -> str:
+    """Remove a fenced/bare JSON object from a reply (lenient OSS path)."""
+
+    stripped = re.sub(r"```(?:json)?\s*\{.*\}\s*```", "", text, flags=re.DOTALL)
+    if stripped != text:
+        return stripped
+    start, end = text.find("{"), text.rfind("}")
+    if start != -1 and end > start:
+        return text[:start] + text[end + 1 :]
+    return text

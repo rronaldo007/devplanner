@@ -554,6 +554,7 @@ class DashboardFlowTests(TestCase):
         resp = self.client.post(reverse("planner:settings"), {
             "anthropic_api_key": "sk-test",
             "default_language": "fr",
+            "ai_provider": "claude",
         })
         self.assertRedirects(resp, reverse("planner:settings"))
         self.user.profile.refresh_from_db()
@@ -664,7 +665,9 @@ class ProjectAssistantTests(TestCase):
         project = _make_project(nokey)
         self.client.force_login(nokey)
         _install_anthropic_stub("x")  # installed, but user has no key
-        resp = self.client.get(reverse("planner:project_assistant", args=[project.pk]))
+        # With no Claude key AND no OSS endpoint, the assistant is unavailable.
+        with mock.patch.dict(os.environ, {"OSS_BASE_URL": "", "OLLAMA_HOST": ""}):
+            resp = self.client.get(reverse("planner:project_assistant", args=[project.pk]))
         self.assertRedirects(resp, reverse("planner:project_detail", args=[project.pk]))
 
     def test_plain_reply_has_no_proposal(self):
@@ -2096,15 +2099,18 @@ class SettingsApiKeyTests(TestCase):
         self.assertNotContains(resp, "sk-ant-secret")
 
     def test_blank_submit_keeps_existing_key(self):
-        resp = self.client.post(self.url, {"anthropic_api_key": "", "default_language": "en"})
+        resp = self.client.post(self.url, {
+            "anthropic_api_key": "", "default_language": "en", "ai_provider": "claude",
+        })
         self.assertEqual(resp.status_code, 302)
         self.user.profile.refresh_from_db()
         self.assertEqual(self.user.profile.anthropic_api_key, "sk-ant-secret")
 
     def test_new_key_replaces_existing(self):
-        resp = self.client.post(
-            self.url, {"anthropic_api_key": "sk-ant-new", "default_language": "en"}
-        )
+        resp = self.client.post(self.url, {
+            "anthropic_api_key": "sk-ant-new", "default_language": "en",
+            "ai_provider": "claude",
+        })
         self.assertEqual(resp.status_code, 302)
         self.user.profile.refresh_from_db()
         self.assertEqual(self.user.profile.anthropic_api_key, "sk-ant-new")
@@ -2262,7 +2268,8 @@ class ConversationAiOptionsTests(TestCase):
         project = _make_project(keyed)
         conv = project.conversations.create(title="t", provider="oss")
         _install_anthropic_stub("x")
-        with mock.patch.dict(os.environ, {"OSS_BASE_URL": "", "OSS_MODEL": ""}):
+        # Clear OLLAMA_HOST too — it would otherwise derive a base_url (fallback).
+        with mock.patch.dict(os.environ, {"OSS_BASE_URL": "", "OSS_MODEL": "", "OLLAMA_HOST": ""}):
             resp = self.client.post(
                 reverse("planner:project_assistant_message", args=[project.pk]),
                 data=json.dumps({"message": "hi", "conversation_id": conv.pk}),
@@ -2290,3 +2297,186 @@ class ConversationAiOptionsTests(TestCase):
     def test_assistant_available_helper(self):
         # No Claude key, but OSS configured.
         self.assertTrue(chat_mod.assistant_available(self.user))
+
+
+class OssOllamaHostFallbackTests(TestCase):
+    """oss.config() derives base_url from OLLAMA_HOST when OSS_BASE_URL is unset."""
+
+    def test_derives_base_url_from_ollama_host(self):
+        from planner.generators import oss
+        env = {"OSS_BASE_URL": "", "OLLAMA_HOST": "http://100.101.186.97:11434"}
+        with mock.patch.dict(os.environ, env):
+            self.assertEqual(oss.config()["base_url"], "http://100.101.186.97:11434/v1")
+
+    def test_oss_base_url_takes_precedence(self):
+        from planner.generators import oss
+        env = {"OSS_BASE_URL": "http://explicit:1234/v1", "OLLAMA_HOST": "http://other:11434"}
+        with mock.patch.dict(os.environ, env):
+            self.assertEqual(oss.config()["base_url"], "http://explicit:1234/v1")
+
+
+# ===========================================================================
+# Lenient proposal parsing (OSS path tolerance for weaker models)
+# ===========================================================================
+class LenientProposalParsingTests(TestCase):
+    def test_strict_ignores_fenced_json_without_marker(self):
+        text = 'Sure.\n```json\n{"changes":[{"type":"field","field":"stack","value":"Go"}]}\n```'
+        changes, _ = chat_mod._parse_proposal(text)  # strict (Claude)
+        self.assertIsNone(changes)
+
+    def test_lenient_accepts_fenced_json_without_marker(self):
+        text = 'Sure.\n```json\n{"changes":[{"type":"field","field":"stack","value":"Go"}]}\n```'
+        changes, _ = chat_mod._parse_proposal(text, lenient=True)
+        self.assertEqual(len(changes), 1)
+        self.assertEqual(changes[0]["field"], "stack")
+
+    def test_lenient_accepts_bare_change_and_normalizes_kind(self):
+        # deepseek-style: a single bare change with an invalid kind.
+        text = ('Here is the doc:\n```json\n'
+                '{"type":"document","document_id":null,"kind":"Security Plan",'
+                '"title":"Security Plan","body":"# Security Plan\\n..."}\n```')
+        changes, _ = chat_mod._parse_proposal(text, lenient=True)
+        self.assertEqual(len(changes), 1)
+        self.assertEqual(changes[0]["kind"], "custom")  # invalid kind → custom
+        self.assertEqual(changes[0]["title"], "Security Plan")
+
+    def test_lenient_strips_json_from_reply(self):
+        text = ('I drafted it.\n```json\n{"changes":[{"type":"document","kind":"custom",'
+                '"title":"X","body":"# X"}]}\n```')
+        res = chat_mod._finish_assistant_turn(text, "en", False, lenient=True)
+        self.assertTrue(res["proposals"])
+        self.assertNotIn("```", res["reply"])
+        self.assertIn("I drafted it.", res["reply"])
+
+
+class InlineDocWrapTests(TestCase):
+    """OSS path wraps an inline-written document into an apply-able proposal."""
+
+    DOC = "# Deployment Plan\n\n## Hosting\n" + ("- step\n" * 60)
+
+    def test_is_file_request(self):
+        self.assertTrue(chat_mod._is_file_request("generate a file for the work you just did"))
+        self.assertTrue(chat_mod._is_file_request("create a deployment document"))
+        self.assertFalse(chat_mod._is_file_request("what stack am I using?"))
+
+    def test_wrap_inline_doc_requires_substantial_doc(self):
+        self.assertIsNone(chat_mod._wrap_inline_doc("Sure, here you go."))
+        wrapped = chat_mod._wrap_inline_doc("Here it is:\n\n" + self.DOC)
+        self.assertEqual(wrapped["kind"], "custom")
+        self.assertEqual(wrapped["title"], "Deployment Plan")
+        self.assertIn("## Hosting", wrapped["body"])
+
+    def test_finish_wraps_inline_doc_on_file_request(self):
+        text = "You can copy this and save it as plan.md:\n\n" + self.DOC
+        res = chat_mod._finish_assistant_turn(
+            text, "en", False, lenient=True,
+            user_request="generate a file for the work you just did",
+        )
+        self.assertEqual(len(res["proposals"]), 1)
+        self.assertEqual(res["proposals"][0]["title"], "Deployment Plan")
+        self.assertNotIn("save it as plan.md", res["reply"])
+
+    def test_finish_does_not_wrap_ordinary_answer(self):
+        # Long doc-like text but the user did NOT ask for a file → no wrap.
+        res = chat_mod._finish_assistant_turn(
+            self.DOC, "en", False, lenient=True, user_request="explain my hosting setup",
+        )
+        self.assertEqual(res["proposals"], [])
+
+    def test_claude_path_never_wraps(self):
+        # Non-lenient (Claude) must not wrap inline docs.
+        res = chat_mod._finish_assistant_turn(
+            self.DOC, "en", False, user_request="generate a file",
+        )
+        self.assertEqual(res["proposals"], [])
+
+
+class SavePreviousAndClassifyTests(TestCase):
+    """OSS 'save the previous output' capture + auto-classify on apply."""
+
+    def test_is_save_previous_request(self):
+        self.assertTrue(chat_mod._is_save_previous_request("generate a file for the work you just did"))
+        self.assertTrue(chat_mod._is_save_previous_request("save this as a document"))
+        self.assertTrue(chat_mod._is_save_previous_request("create a file for the diagram you made"))
+        self.assertFalse(chat_mod._is_save_previous_request("write a brand new security plan"))
+
+    def test_save_previous_captures_prior_assistant_message(self):
+        # No openai stub needed — this path must NOT call the model.
+        prev = "# Class Diagram\n\n" + ("Some UML detail line.\n" * 30)
+        history = [
+            {"role": "user", "content": "make a class diagram"},
+            {"role": "assistant", "content": prev},
+            {"role": "user", "content": "generate a file for the work you just did"},
+        ]
+        res = chat_mod.assistant_turn(history, "ctx", provider="oss", model="x")
+        self.assertEqual(len(res["proposals"]), 1)
+        self.assertEqual(res["proposals"][0]["title"], "Class Diagram")
+        self.assertIn("Some UML detail", res["proposals"][0]["body"])
+
+    def test_applied_custom_doc_is_classified(self):
+        from planner.views import _apply_document_change
+        user = _make_user(api_key="")  # keyword classifier, no network
+        project = _make_project(user)
+        with mock.patch.dict(os.environ, {"OSS_MODEL": "", "OSS_BASE_URL": "", "OLLAMA_HOST": ""}):
+            _apply_document_change(project, {
+                "type": "document", "kind": "custom", "title": "Database Schema",
+                "body": "Tables, foreign keys, indexes and migrations for the data model.",
+            })
+        doc = project.documents.get(title="Database Schema")
+        self.assertEqual(doc.category, Document.CATEGORY_DATA_DESIGN)
+
+
+# ===========================================================================
+# Per-user "generate with local" preference
+# ===========================================================================
+class GenerateWithLocalTests(TestCase):
+    def setUp(self):
+        from .generators import engine
+        self.engine = engine
+
+    def _project_with_pref(self, provider, oss_model=""):
+        user = _make_user(api_key="sk-claude")  # Claude available
+        user.profile.ai_provider = provider
+        user.profile.oss_model = oss_model
+        user.profile.save()
+        return _make_project(user)
+
+    def test_default_claude_first(self):
+        project = self._project_with_pref("claude")
+        with mock.patch.dict(os.environ, _OSS_ENV):  # OSS also configured
+            tiers = self.engine._ai_tiers(project)
+        self.assertEqual(tiers, ["claude", "oss"])
+
+    def test_oss_preference_puts_oss_first(self):
+        project = self._project_with_pref("oss")
+        with mock.patch.dict(os.environ, _OSS_ENV):
+            tiers = self.engine._ai_tiers(project)
+        self.assertEqual(tiers, ["oss", "claude"])  # local first, Claude fallback
+
+    def test_oss_preference_with_per_user_model_no_env_model(self):
+        # User picked a model; server has the endpoint (OLLAMA_HOST) but no OSS_MODEL.
+        project = self._project_with_pref("oss", oss_model="gemma4:26b")
+        env = {"OSS_BASE_URL": "", "OSS_MODEL": "", "OLLAMA_HOST": "http://shadow:11434"}
+        with mock.patch.dict(os.environ, env):
+            self.assertTrue(self.engine._oss_generation_ready(project))
+            self.assertEqual(self.engine._oss_kwargs(project)["model"], "gemma4:26b")
+            self.assertEqual(self.engine._ai_tiers(project)[0], "oss")
+
+    def test_oss_preference_falls_back_to_claude_when_local_unconfigured(self):
+        project = self._project_with_pref("oss")  # no oss_model
+        env = {"OSS_BASE_URL": "", "OSS_MODEL": "", "OLLAMA_HOST": ""}
+        with mock.patch.dict(os.environ, env):
+            tiers = self.engine._ai_tiers(project)
+        self.assertEqual(tiers, ["claude"])  # local not ready → Claude
+
+    def test_settings_form_saves_provider_and_model(self):
+        user = _make_user(api_key="")
+        self.client.force_login(user)
+        resp = self.client.post(reverse("planner:settings"), {
+            "default_language": "en", "anthropic_api_key": "",
+            "ai_provider": "oss", "oss_model": "gemma4:26b",
+        })
+        self.assertEqual(resp.status_code, 302)
+        user.profile.refresh_from_db()
+        self.assertEqual(user.profile.ai_provider, "oss")
+        self.assertEqual(user.profile.oss_model, "gemma4:26b")
