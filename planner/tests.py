@@ -1571,3 +1571,56 @@ class PasswordResetTests(TestCase):
         )
         self.assertRedirects(resp, reverse("planner:password_reset_done"))
         self.assertEqual(len(mail.outbox), 0)
+
+
+class EmailOrUsernameLoginTests(TestCase):
+    """Login accepts username or email via EmailOrUsernameModelBackend."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="alice", email="Alice@Example.com", password="Sup3rSecret!42",
+        )
+        self.url = reverse("planner:login")
+
+    def _login(self, identifier, password="Sup3rSecret!42"):
+        return self.client.post(
+            self.url, {"username": identifier, "password": password},
+        )
+
+    def test_login_with_username(self):
+        resp = self._login("alice")
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(int(self.client.session["_auth_user_id"]), self.user.pk)
+
+    def test_login_with_email(self):
+        resp = self._login("Alice@Example.com")
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(int(self.client.session["_auth_user_id"]), self.user.pk)
+
+    def test_login_with_email_case_insensitive(self):
+        resp = self._login("alice@example.com")
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(int(self.client.session["_auth_user_id"]), self.user.pk)
+
+    def test_login_wrong_password_fails(self):
+        resp = self._login("alice@example.com", password="nope")
+        self.assertEqual(resp.status_code, 200)
+        self.assertNotIn("_auth_user_id", self.client.session)
+
+    def test_login_unknown_identifier_fails(self):
+        resp = self._login("ghost@example.com")
+        self.assertEqual(resp.status_code, 200)
+        self.assertNotIn("_auth_user_id", self.client.session)
+
+    def test_duplicate_email_is_ambiguous_and_rejected(self):
+        # A second account sharing the email must not let either log in by email.
+        User.objects.create_user(
+            username="alice2", email="alice@example.com", password="Other!42pw",
+        )
+        resp = self._login("alice@example.com")
+        self.assertEqual(resp.status_code, 200)
+        self.assertNotIn("_auth_user_id", self.client.session)
+
+    def test_login_field_relabelled(self):
+        resp = self.client.get(self.url)
+        self.assertContains(resp, "Username or email")
