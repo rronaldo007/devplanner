@@ -202,24 +202,26 @@ def classify_document(
     return result
 
 
-def regenerate(document: "Document", *, force_engine: str | None = None) -> str:
+def regenerate(document: "Document", *, force_engine: str | None = None) -> dict:
     """Refresh ``document.body`` from its parent project.
 
-    Returns the new body (does NOT save the model)."""
+    Returns ``{"body", "_claude_error"}`` (does NOT save the model). Diagrams
+    are deterministic, so their ``_claude_error`` is always empty.
+    """
 
     project = document.project
     if document.kind == "use_case_diagram":
-        return diagrams.use_case(project)
+        return {"body": diagrams.use_case(project), "_claude_error": ""}
     if document.kind == "erd_diagram":
-        return diagrams.erd(project)
+        return {"body": diagrams.erd(project), "_claude_error": ""}
     if document.kind == "flow_diagram":
-        return diagrams.flow(project)
+        return {"body": diagrams.flow(project), "_claude_error": ""}
     if document.kind == "custom":
         result = generate_custom(project, document.title, document.prompt or "")
-        return result["body"]
+        return {"body": result["body"], "_claude_error": result.get("_claude_error", "")}
     # Default planning docs.
     out = generate_all(project, force_engine=force_engine)
-    return out.get(document.kind, "")
+    return {"body": out.get(document.kind, ""), "_claude_error": out.get("_claude_error", "")}
 
 
 def sync_default_documents(project: "Project", *, force_engine: str | None = None) -> dict:
