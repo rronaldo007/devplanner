@@ -149,7 +149,7 @@
       dots.remove();
       const data = await resp.json().catch(() => ({}));
       if (!resp.ok) {
-        bubble("assistant", data.detail ? "Error talking to Claude: " + data.detail : "Something went wrong. Please try again.");
+        bubble("assistant", data.detail || "Something went wrong. Please try again.");
       } else {
         bubble("assistant", data.reply || "");
         if (data.has_proposal) proposalCard(data.message_id, data.proposals || []);

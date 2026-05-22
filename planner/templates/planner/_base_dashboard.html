@@ -64,6 +64,14 @@
     </header>
 
     <main class="max-w-5xl mx-auto px-6 py-8">
+      {% if ai_banner %}
+        <div id="ai-banner" class="mb-4 flex items-start gap-3 rounded-md border border-amber-700 bg-amber-900/40 px-4 py-3 text-sm text-amber-200">
+          <span class="flex-1">{{ ai_banner.message }}
+            <a href="{% url 'planner:settings' %}" class="font-medium underline hover:no-underline">Open Settings</a>
+          </span>
+          <button type="button" onclick="document.getElementById('ai-banner').remove()" class="shrink-0 text-amber-300 hover:text-amber-100" aria-label="Dismiss">&times;</button>
+        </div>
+      {% endif %}
       {% if messages %}
         <div class="mb-4 space-y-2">
           {% for message in messages %}

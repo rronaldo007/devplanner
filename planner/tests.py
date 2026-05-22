@@ -13,8 +13,10 @@ Covers:
 from __future__ import annotations
 
 import json
+import os
 import sys
 import types
+from unittest import mock
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase, override_settings
@@ -1359,3 +1361,159 @@ class AdminSmokeTests(TestCase):
         project = _make_project(owner)
         url = reverse("admin:planner_project_change", args=[project.pk])
         self.assertEqual(self.client.get(url).status_code, 200)
+
+
+# ===========================================================================
+# Graceful AI-failure UX
+# ===========================================================================
+from .generators import errors as ai_errors  # noqa: E402
+
+
+def _install_anthropic_credit_error():
+    """Stub anthropic so any API call raises an out-of-credits style 400."""
+
+    _MSG = "Error code: 400 - Your credit balance is too low to access the Anthropic API."
+
+    class _Messages:
+        def create(self, **kwargs):
+            raise RuntimeError(_MSG)
+
+        def stream(self, **kwargs):
+            raise RuntimeError(_MSG)
+
+    class _Anthropic:
+        def __init__(self, *a, **k):
+            self.messages = _Messages()
+
+    module = types.ModuleType("anthropic")
+    module.Anthropic = _Anthropic
+    sys.modules["anthropic"] = module
+    return module
+
+
+class ErrorClassifierTests(TestCase):
+    def test_string_categories(self):
+        self.assertEqual(ai_errors.category_of("your credit balance is too low"), "credits")
+        self.assertEqual(ai_errors.category_of("insufficient credit"), "credits")
+        self.assertEqual(ai_errors.category_of("a billing problem"), "credits")
+        self.assertEqual(ai_errors.category_of("invalid x-api-key"), "auth")
+        self.assertEqual(ai_errors.category_of("authentication_error"), "auth")
+        self.assertEqual(ai_errors.category_of("rate limit exceeded"), "rate_limit")
+        self.assertEqual(ai_errors.category_of("the service is overloaded"), "overloaded")
+        self.assertEqual(ai_errors.category_of("some random boom"), "generic")
+
+    def test_typed_status_code(self):
+        class E(Exception):
+            status_code = 429
+        self.assertEqual(ai_errors.category_of(E("nope")), "rate_limit")
+
+    def test_credits_wins_over_400_status(self):
+        class E(Exception):
+            status_code = 400
+        self.assertEqual(ai_errors.category_of(E("credit balance too low")), "credits")
+
+    def test_friendly_messages_leak_nothing(self):
+        for category, msg in ai_errors.FRIENDLY.items():
+            self.assertTrue(msg, category)
+            low = msg.lower()
+            self.assertNotIn("x-api-key", low)
+            self.assertNotIn("error code", low)
+
+
+class ChatErrorUXTests(TestCase):
+    def setUp(self):
+        self.user = _make_user(api_key="user-sk-test")
+        self.client.force_login(self.user)
+        self._orig = sys.modules.get("anthropic")
+
+    def tearDown(self):
+        if self._orig is None:
+            sys.modules.pop("anthropic", None)
+        else:
+            sys.modules["anthropic"] = self._orig
+
+    def test_intake_credit_error_is_friendly(self):
+        _install_anthropic_credit_error()
+        self.client.get(reverse("planner:project_new_chat"))
+        draft = Project.objects.filter(owner=self.user, is_draft=True).latest("id")
+        resp = self.client.post(
+            reverse("planner:project_chat_message", args=[draft.pk]),
+            data=json.dumps({"message": "hi"}), content_type="application/json",
+        )
+        self.assertEqual(resp.status_code, 502)
+        data = resp.json()
+        self.assertEqual(data["error"], "credits")
+        self.assertNotIn("credit balance", data["detail"].lower())
+        self.assertEqual(self.client.session.get("ai_status"), "credits")
+
+    def test_assistant_credit_error_then_success_clears_flag(self):
+        project = _make_project(self.user)
+        _install_anthropic_credit_error()
+        resp = self.client.post(
+            reverse("planner:project_assistant_message", args=[project.pk]),
+            data=json.dumps({"message": "go"}), content_type="application/json",
+        )
+        self.assertEqual(resp.status_code, 502)
+        self.assertEqual(resp.json()["error"], "credits")
+        self.assertEqual(self.client.session.get("ai_status"), "credits")
+
+        _install_anthropic_stub("All good, nothing to change.")
+        ok = self.client.post(
+            reverse("planner:project_assistant_message", args=[project.pk]),
+            data=json.dumps({"message": "thanks"}), content_type="application/json",
+        )
+        self.assertEqual(ok.status_code, 200)
+        self.assertIsNone(self.client.session.get("ai_status"))
+
+
+class DocumentNewErrorUXTests(TestCase):
+    def setUp(self):
+        self.user = _make_user(api_key="user-sk-test")
+        self.client.force_login(self.user)
+        self._orig = sys.modules.get("anthropic")
+
+    def tearDown(self):
+        if self._orig is None:
+            sys.modules.pop("anthropic", None)
+        else:
+            sys.modules["anthropic"] = self._orig
+
+    def test_document_new_credit_error_is_friendly(self):
+        project = _make_project(self.user)
+        _install_anthropic_credit_error()
+        resp = self.client.post(
+            reverse("planner:document_new", args=[project.pk]),
+            data={"title": "Architecture", "prompt": "describe the system"},
+            follow=True,
+        )
+        self.assertEqual(resp.status_code, 200)
+        rendered = " ".join(str(m) for m in resp.context["messages"]).lower()
+        self.assertIn("out of credits", rendered)
+        self.assertNotIn("credit balance", rendered)
+        self.assertEqual(self.client.session.get("ai_status"), "credits")
+
+
+class AiBannerTests(TestCase):
+    def test_no_key_shows_template_mode_banner(self):
+        with mock.patch.dict(os.environ, {"ANTHROPIC_API_KEY": ""}):
+            user = _make_user(username="nokey", api_key="")
+            self.client.force_login(user)
+            resp = self.client.get(reverse("planner:dashboard"))
+            self.assertContains(resp, 'id="ai-banner"')
+            self.assertContains(resp, "template mode")
+
+    def test_credits_flag_shows_banner(self):
+        user = _make_user(username="withkey", api_key="k")
+        self.client.force_login(user)
+        session = self.client.session
+        session["ai_status"] = "credits"
+        session.save()
+        resp = self.client.get(reverse("planner:dashboard"))
+        self.assertContains(resp, 'id="ai-banner"')
+        self.assertContains(resp, "out of credits")
+
+    def test_key_and_no_flag_shows_no_banner(self):
+        user = _make_user(username="clean", api_key="k")
+        self.client.force_login(user)
+        resp = self.client.get(reverse("planner:dashboard"))
+        self.assertNotContains(resp, 'id="ai-banner"')
