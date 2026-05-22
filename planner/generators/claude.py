@@ -19,6 +19,8 @@ if TYPE_CHECKING:  # pragma: no cover
 # Single source of truth for the model id (chat.py imports this). Override per
 # deployment with ANTHROPIC_MODEL, or per user via their saved API-key profile.
 DEFAULT_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-6")
+# Selectable Claude models for the per-conversation AI-options dropdown.
+KNOWN_MODELS = ["claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5-20251001"]
 # Document generation runs non-streaming, so keep this at the ~16k safe ceiling
 # for non-streaming requests (larger values risk the SDK's HTTP-timeout guard).
 MAX_TOKENS = int(os.environ.get("ANTHROPIC_MAX_TOKENS", "16000"))

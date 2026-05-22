@@ -247,10 +247,24 @@ class Conversation(models.Model):
 
     DEFAULT_TITLE = "New conversation"
 
+    # Which AI backend powers this thread.
+    PROVIDER_CLAUDE = "claude"
+    PROVIDER_OSS = "oss"
+    PROVIDER_CHOICES = [
+        (PROVIDER_CLAUDE, "Claude"),
+        (PROVIDER_OSS, "Local / OSS (Ollama-compatible)"),
+    ]
+
     project = models.ForeignKey(
         Project, on_delete=models.CASCADE, related_name="conversations",
     )
     title = models.CharField(max_length=200, default=DEFAULT_TITLE)
+    # Per-conversation AI choice. ``model`` is the backend's model id (e.g.
+    # "gemma4:26b" for OSS, or a Claude model); blank means the backend default.
+    provider = models.CharField(
+        max_length=10, choices=PROVIDER_CHOICES, default=PROVIDER_CLAUDE,
+    )
+    model = models.CharField(max_length=100, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

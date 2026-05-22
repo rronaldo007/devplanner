@@ -105,6 +105,11 @@ urlpatterns = [
         views.conversation_delete,
         name="conversation_delete",
     ),
+    path(
+        "projects/<int:pk>/conversations/<int:conv_pk>/model/",
+        views.conversation_set_model,
+        name="conversation_set_model",
+    ),
     path("projects/<int:pk>/edit/", views.project_edit, name="project_edit"),
     path("projects/<int:pk>/delete/", views.project_delete, name="project_delete"),
     path(

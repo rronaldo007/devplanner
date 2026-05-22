@@ -66,6 +66,37 @@
         class="rounded-md bg-indigo-600 px-2.5 py-1.5 text-sm font-semibold text-white hover:bg-indigo-500">+ New</button>
     </form>
   </div>
+
+  <!-- AI options: per-conversation model choice (Claude / local OSS). -->
+  <div class="flex items-center justify-end gap-2 border-b border-slate-800 px-3 py-2 text-xs text-slate-400">
+    <label for="conv-model">AI model</label>
+    <select id="conv-model"
+      class="max-w-[60%] rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-slate-100 focus:border-indigo-500 focus:outline-none">
+      <optgroup label="Claude">
+        <option data-provider="claude" data-model=""
+          {% if active_conversation.provider == 'claude' and not active_conversation.model %}selected{% endif %}>Claude (default)</option>
+        {% for m in model_options.claude %}
+          <option data-provider="claude" data-model="{{ m }}"
+            {% if active_conversation.provider == 'claude' and active_conversation.model == m %}selected{% endif %}>{{ m }}</option>
+        {% endfor %}
+      </optgroup>
+      {% if model_options.oss %}
+        <optgroup label="Local / OSS">
+          {% for m in model_options.oss %}
+            <option data-provider="oss" data-model="{{ m }}"
+              {% if active_conversation.provider == 'oss' and active_conversation.model == m %}selected{% endif %}>{{ m }}</option>
+          {% endfor %}
+        </optgroup>
+      {% endif %}
+    </select>
+  </div>
+  <form id="conv-model-form" method="post" class="hidden"
+        action="{% url 'planner:conversation_set_model' project.pk active_conversation.pk %}">
+    {% csrf_token %}
+    <input type="hidden" name="provider" id="conv-model-provider">
+    <input type="hidden" name="model" id="conv-model-model">
+  </form>
+
   <div id="chat-log" class="flex-1 space-y-4 overflow-y-auto p-5">
     {% for m in chat_messages %}
       <div class="flex {% if m.role == 'user' %}justify-end{% else %}justify-start{% endif %}">
@@ -261,6 +292,17 @@
   if (mobileSelect) {
     mobileSelect.addEventListener("change", function () {
       window.location.search = "?c=" + this.value;
+    });
+  }
+
+  // AI model selector → set provider/model on the conversation and reload.
+  const modelSelect = document.getElementById("conv-model");
+  if (modelSelect) {
+    modelSelect.addEventListener("change", function () {
+      const opt = this.options[this.selectedIndex];
+      document.getElementById("conv-model-provider").value = opt.dataset.provider || "claude";
+      document.getElementById("conv-model-model").value = opt.dataset.model || "";
+      document.getElementById("conv-model-form").submit();
     });
   }
 
