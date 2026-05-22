@@ -22,6 +22,14 @@
     <a href="{% url 'planner:document_new' project.pk %}" class="inline-flex items-center rounded-md border border-slate-700 px-3 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-800">
       + New document
     </a>
+    {% if has_unclassified %}
+    <form action="{% url 'planner:project_classify_all' project.pk %}" method="post" class="inline">
+      {% csrf_token %}
+      <button type="submit" class="inline-flex items-center rounded-md border border-slate-700 px-3 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-800">
+        🏷️ Classify all
+      </button>
+    </form>
+    {% endif %}
     <a href="{% url 'planner:project_notes' project.pk %}" class="inline-flex items-center rounded-md border border-slate-700 px-3 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-800">
       📝 Notes
     </a>

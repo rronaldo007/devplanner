@@ -27,7 +27,7 @@
     </div>
     <h1 class="mt-1 text-2xl font-bold text-white">{{ document.title }}</h1>
     <p class="mt-1 text-xs text-slate-500">
-      {{ document.get_kind_display }} · updated {{ document.updated_at|date:"M j, Y H:i" }}
+      {{ document.get_kind_display }} · <span class="text-slate-400">{{ document.get_category_display }}</span> · updated {{ document.updated_at|date:"M j, Y H:i" }}
       {% if not document.is_generated %} · <span class="text-amber-300">hand-edited</span>{% endif %}
     </p>
   </div>
@@ -43,6 +43,10 @@
       <a href="{% url 'planner:document_drawio' project.pk document.pk %}" class="inline-flex items-center rounded-md border border-slate-700 px-3 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-800">Download .drawio</a>
     {% endif %}
     {% if document.kind == 'custom' %}
+      <form action="{% url 'planner:document_reclassify' project.pk document.pk %}" method="post" class="inline">
+        {% csrf_token %}
+        <button type="submit" class="inline-flex items-center rounded-md border border-slate-700 px-3 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-800">Classify</button>
+      </form>
       <form action="{% url 'planner:document_delete' project.pk document.pk %}" method="post" onsubmit="return confirm('Delete this document?');" class="inline">
         {% csrf_token %}
         <button type="submit" class="inline-flex items-center rounded-md border border-red-700 px-3 py-2 text-sm font-semibold text-red-300 hover:bg-red-900/30">Delete</button>

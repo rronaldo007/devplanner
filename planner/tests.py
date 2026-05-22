@@ -1701,3 +1701,150 @@ class EmailOrUsernameLoginTests(TestCase):
     def test_login_field_relabelled(self):
         resp = self.client.get(self.url)
         self.assertContains(resp, "Username or email")
+
+
+# ===========================================================================
+# Document classification (AI + keyword fallback)
+# ===========================================================================
+class DocumentClassifyKeywordTests(TestCase):
+    """The deterministic fallback used when Claude is unavailable."""
+
+    def test_keyword_maps_each_category(self):
+        from .generators import classify
+        cases = {
+            "data_design": ("Database Schema", "Tables, foreign keys, migrations."),
+            "system_design": ("Technical Architecture", "API endpoints, microservices, deployment."),
+            "app_design": ("Wireframes", "User flow, navigation, accessibility, design system."),
+            "business": ("Pricing & GTM", "Revenue model, market competition, KPIs."),
+            "system_modeling": ("Class Diagram", "UML domain model, state machine."),
+        }
+        for expected, (title, body) in cases.items():
+            self.assertEqual(classify.classify_keyword(title, body), expected, title)
+
+    def test_keyword_defaults_to_other(self):
+        from .generators import classify
+        self.assertEqual(
+            classify.classify_keyword("Misc", "nothing meaningful here"),
+            Document.CATEGORY_OTHER,
+        )
+
+
+class ClassifyDocumentEngineTests(TestCase):
+    def setUp(self):
+        self._orig = sys.modules.get("anthropic")
+
+    def tearDown(self):
+        if self._orig is None:
+            sys.modules.pop("anthropic", None)
+        else:
+            sys.modules["anthropic"] = self._orig
+
+    def test_no_key_uses_keyword_engine(self):
+        from .generators import classify_document
+        project = _make_project(_make_user(api_key=""))
+        out = classify_document(project, title="Database Schema", body="tables")
+        self.assertEqual(out["engine"], "keyword")
+        self.assertEqual(out["category"], Document.CATEGORY_DATA_DESIGN)
+
+    def test_claude_engine_returns_slug(self):
+        _install_anthropic_stub("data_design")
+        from .generators import classify_document
+        project = _make_project(_make_user(api_key="sk-x"))
+        out = classify_document(project, title="anything", body="anything")
+        self.assertEqual(out["engine"], "claude")
+        self.assertEqual(out["category"], Document.CATEGORY_DATA_DESIGN)
+
+    def test_claude_invalid_slug_falls_back_to_keyword(self):
+        _install_anthropic_stub("not_a_real_category")
+        from .generators import classify_document
+        project = _make_project(_make_user(api_key="sk-x"))
+        out = classify_document(project, title="Pricing and revenue", body="market")
+        self.assertEqual(out["engine"], "keyword")
+        self.assertEqual(out["category"], Document.CATEGORY_BUSINESS)
+        self.assertIn("not_a_real_category", out["_claude_error"])
+
+    def test_claude_error_falls_back_to_keyword(self):
+        class _Boom:
+            def __init__(self, *a, **kw): pass
+            class _M:
+                def create(self, **kw): raise RuntimeError("boom")
+            messages = _M()
+        module = types.ModuleType("anthropic")
+        module.Anthropic = _Boom
+        sys.modules["anthropic"] = module
+        from .generators import classify_document
+        project = _make_project(_make_user(api_key="sk-x"))
+        out = classify_document(project, title="API architecture", body="deployment")
+        self.assertEqual(out["engine"], "keyword")
+        self.assertEqual(out["category"], Document.CATEGORY_SYSTEM_DESIGN)
+        self.assertIn("boom", out["_claude_error"])
+
+
+class ClassifyViewTests(TestCase):
+    def setUp(self):
+        self.user = _make_user(api_key="")  # keyword engine, no network
+        self.client.force_login(self.user)
+        self.project = _make_project(self.user)
+
+    def test_new_custom_doc_is_auto_classified(self):
+        resp = self.client.post(
+            reverse("planner:document_new", args=[self.project.pk]),
+            {"title": "Database Schema", "prompt": ""},
+        )
+        self.assertEqual(resp.status_code, 302)
+        doc = self.project.documents.get(title="Database Schema")
+        self.assertEqual(doc.category, Document.CATEGORY_DATA_DESIGN)
+
+    def test_reclassify_updates_category(self):
+        doc = Document.objects.create(
+            project=self.project, kind=Document.KIND_CUSTOM,
+            title="API Architecture", body="microservices and deployment",
+            category=Document.CATEGORY_OTHER,
+        )
+        resp = self.client.post(
+            reverse("planner:document_reclassify", args=[self.project.pk, doc.pk])
+        )
+        self.assertEqual(resp.status_code, 302)
+        doc.refresh_from_db()
+        self.assertEqual(doc.category, Document.CATEGORY_SYSTEM_DESIGN)
+
+    def test_reclassify_rejects_builtin(self):
+        doc = Document.objects.create(
+            project=self.project, kind=Document.KIND_BUSINESS_PLAN, title="BP",
+        )
+        resp = self.client.post(
+            reverse("planner:document_reclassify", args=[self.project.pk, doc.pk])
+        )
+        self.assertEqual(resp.status_code, 302)
+        doc.refresh_from_db()
+        self.assertEqual(doc.category, Document.CATEGORY_BUSINESS)  # unchanged
+
+    def test_classify_all_moves_uncategorized_custom_docs(self):
+        Document.objects.create(
+            project=self.project, kind=Document.KIND_CUSTOM,
+            title="Database Schema", body="tables", category=Document.CATEGORY_OTHER,
+        )
+        Document.objects.create(
+            project=self.project, kind=Document.KIND_CUSTOM,
+            title="Wireframes", body="user flow and navigation",
+            category=Document.CATEGORY_OTHER,
+        )
+        resp = self.client.post(
+            reverse("planner:project_classify_all", args=[self.project.pk])
+        )
+        self.assertEqual(resp.status_code, 302)
+        cats = {
+            d.title: d.category
+            for d in self.project.documents.filter(kind=Document.KIND_CUSTOM)
+        }
+        self.assertEqual(cats["Database Schema"], Document.CATEGORY_DATA_DESIGN)
+        self.assertEqual(cats["Wireframes"], Document.CATEGORY_APP_DESIGN)
+
+    def test_classify_all_button_shown_only_when_unclassified(self):
+        url = reverse("planner:project_detail", args=[self.project.pk])
+        self.assertNotContains(self.client.get(url), "Classify all")
+        Document.objects.create(
+            project=self.project, kind=Document.KIND_CUSTOM,
+            title="X", body="y", category=Document.CATEGORY_OTHER,
+        )
+        self.assertContains(self.client.get(url), "Classify all")

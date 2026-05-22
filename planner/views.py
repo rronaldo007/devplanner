@@ -459,6 +459,10 @@ def project_detail(request, pk):
         if by_category.get(value)
     ]
     has_custom = any(d.kind == Document.KIND_CUSTOM for d in docs)
+    has_unclassified = any(
+        d.kind == Document.KIND_CUSTOM and d.category == Document.CATEGORY_OTHER
+        for d in docs
+    )
     return render(
         request,
         "planner/dashboard/project_detail.html",
@@ -467,6 +471,7 @@ def project_detail(request, pk):
             "category_groups": category_groups,
             "doc_count": len(docs),
             "has_custom": has_custom,
+            "has_unclassified": has_unclassified,
         },
     )
 
@@ -534,6 +539,73 @@ def document_regenerate(request, pk, doc_pk):
 
 @require_http_methods(["POST"])
 @login_required
+def document_reclassify(request, pk, doc_pk):
+    """Re-run AI classification on a single custom document."""
+
+    project = _owned_project(request, pk)
+    document = get_object_or_404(Document, pk=doc_pk, project=project)
+    if document.kind != Document.KIND_CUSTOM:
+        messages.error(
+            request, "Only custom documents can be reclassified; built-in "
+            "documents have a fixed category."
+        )
+        return HttpResponseRedirect(
+            reverse("planner:document_detail", args=[project.pk, document.pk])
+        )
+    result = generators.classify_document(
+        project, title=document.title, body=document.body
+    )
+    document.category = result["category"]
+    document.save(update_fields=["category"])
+    if result.get("_claude_error"):
+        err_cat, detail = errors.classify(result["_claude_error"])
+        _record_ai_status(request, err_cat)
+    else:
+        _clear_ai_status(request)
+    messages.success(
+        request,
+        f"Classified as “{document.get_category_display()}” via {result['engine']}.",
+    )
+    return HttpResponseRedirect(
+        reverse("planner:document_detail", args=[project.pk, document.pk])
+    )
+
+
+@require_http_methods(["POST"])
+@login_required
+def project_classify_all(request, pk):
+    """Classify every uncategorized (Other) custom document in one pass."""
+
+    project = _owned_project(request, pk)
+    pending = project.documents.filter(
+        kind=Document.KIND_CUSTOM, category=Document.CATEGORY_OTHER
+    )
+    moved = 0
+    last_error = ""
+    for document in pending:
+        result = generators.classify_document(
+            project, title=document.title, body=document.body
+        )
+        if result.get("_claude_error"):
+            last_error = result["_claude_error"]
+        if result["category"] != document.category:
+            document.category = result["category"]
+            document.save(update_fields=["category"])
+            moved += 1
+    if last_error:
+        err_cat, _ = errors.classify(last_error)
+        _record_ai_status(request, err_cat)
+    else:
+        _clear_ai_status(request)
+    if moved:
+        messages.success(request, f"Classified {moved} document(s) into categories.")
+    else:
+        messages.info(request, "No uncategorized custom documents to classify.")
+    return HttpResponseRedirect(reverse("planner:project_detail", args=[project.pk]))
+
+
+@require_http_methods(["POST"])
+@login_required
 def document_delete(request, pk, doc_pk):
     project = _owned_project(request, pk)
     document = get_object_or_404(Document, pk=doc_pk, project=project)
@@ -557,9 +629,15 @@ def document_new(request, pk):
             title = form.cleaned_data["title"]
             prompt = form.cleaned_data["prompt"]
             result = generators.generate_custom(project, title, prompt)
+            # Auto-classify the new custom doc into a spec-pack category
+            # (Claude when available, keyword fallback otherwise).
+            classified = generators.classify_document(
+                project, title=title, body=result["body"]
+            )
             document = Document.objects.create(
                 project=project,
                 kind=Document.KIND_CUSTOM,
+                category=classified["category"],
                 title=title,
                 body=result["body"],
                 prompt=prompt,

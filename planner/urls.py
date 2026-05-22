@@ -92,6 +92,11 @@ urlpatterns = [
     ),
     path("projects/<int:pk>/edit/", views.project_edit, name="project_edit"),
     path("projects/<int:pk>/delete/", views.project_delete, name="project_delete"),
+    path(
+        "projects/<int:pk>/classify-all/",
+        views.project_classify_all,
+        name="project_classify_all",
+    ),
 
     # --- Documents ------------------------------------------------------
     path("projects/<int:pk>/documents/new/", views.document_new, name="document_new"),
@@ -109,6 +114,11 @@ urlpatterns = [
         "projects/<int:pk>/documents/<int:doc_pk>/regenerate/",
         views.document_regenerate,
         name="document_regenerate",
+    ),
+    path(
+        "projects/<int:pk>/documents/<int:doc_pk>/reclassify/",
+        views.document_reclassify,
+        name="document_reclassify",
     ),
     path(
         "projects/<int:pk>/documents/<int:doc_pk>/delete/",
