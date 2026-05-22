@@ -94,19 +94,14 @@ def classify_keyword(title: str, body: str) -> str:
 # ---------------------------------------------------------------------------
 # Claude-backed classification
 # ---------------------------------------------------------------------------
-def classify_claude(title: str, body: str, *, api_key: str | None = None) -> str:
-    """Ask Claude for the best category slug. Raises on an invalid response.
+def classify_prompt(title: str, body: str) -> tuple[str, str]:
+    """Build the ``(system, user)`` prompt for category classification.
 
-    Keeps the call tiny (short system prompt, truncated body, ~16 output
-    tokens) so it stays cheap. The caller is expected to fall back to
-    :func:`classify_keyword` on any exception.
+    Shared by the Claude and OSS engines so the instruction stays single-sourced.
     """
-
-    import anthropic
 
     from planner.models import Document
 
-    valid = valid_categories()
     choices = "\n".join(f"- {value}: {label}" for value, label in Document.CATEGORY_CHOICES)
     system = (
         "You classify a software project document into exactly one category. "
@@ -118,7 +113,33 @@ def classify_claude(title: str, body: str, *, api_key: str | None = None) -> str
     # input tokens (and cost) down.
     excerpt = (body or "")[:2000]
     user_msg = f"Title: {title}\n\nDocument (excerpt):\n{excerpt}"
+    return system, user_msg
 
+
+def normalize_slug(raw: str) -> str:
+    """Validate a model's raw category reply, returning a known slug.
+
+    Raises ``ValueError`` if the reply isn't one of the known categories, so
+    callers can fall back to :func:`classify_keyword`.
+    """
+
+    slug = (raw or "").strip().lower().strip(".'\" ")
+    if slug not in valid_categories():
+        raise ValueError(f"Model returned an unknown category: {slug!r}")
+    return slug
+
+
+def classify_claude(title: str, body: str, *, api_key: str | None = None) -> str:
+    """Ask Claude for the best category slug. Raises on an invalid response.
+
+    Keeps the call tiny (short system prompt, truncated body, ~16 output
+    tokens) so it stays cheap. The caller is expected to fall back to
+    :func:`classify_keyword` on any exception.
+    """
+
+    import anthropic
+
+    system, user_msg = classify_prompt(title, body)
     client = anthropic.Anthropic(api_key=api_key) if api_key else anthropic.Anthropic()
     response = client.messages.create(
         model=DEFAULT_MODEL,
@@ -131,7 +152,4 @@ def classify_claude(title: str, body: str, *, api_key: str | None = None) -> str
         text = getattr(block, "text", None)
         if text:
             parts.append(text)
-    slug = "".join(parts).strip().lower().strip(".'\" ")
-    if slug not in valid:
-        raise ValueError(f"Claude returned an unknown category: {slug!r}")
-    return slug
+    return normalize_slug("".join(parts))

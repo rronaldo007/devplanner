@@ -24,15 +24,12 @@ DEFAULT_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-6")
 MAX_TOKENS = int(os.environ.get("ANTHROPIC_MAX_TOKENS", "16000"))
 
 
-def generate_documents(project: "Project", *, api_key: str | None = None) -> dict[str, str]:
-    """Generate business plan, specifications and user stories via Claude."""
-
-    import anthropic
-
-    client = anthropic.Anthropic(api_key=api_key) if api_key else anthropic.Anthropic()
-    project_json = _project_to_json(project)
+# ---------------------------------------------------------------------------
+# Prompt builders (shared with the OpenAI-compatible OSS engine so prompts
+# stay single-sourced). Each returns ``(system, user_message)``.
+# ---------------------------------------------------------------------------
+def documents_prompt(project: "Project") -> tuple[str, str]:
     language_name = "French" if project.language == "fr" else "English"
-
     system = (
         "You are a senior software product manager and tech lead. "
         "Given a developer's project brief (JSON), you produce crisp, "
@@ -42,10 +39,9 @@ def generate_documents(project: "Project", *, api_key: str | None = None) -> dic
         "something is missing, mark it as 'TBD' or '—'. Do not wrap your "
         "answer in code fences. Return Markdown only, no preamble."
     )
-
     user_msg = (
         "Project brief (JSON):\n```json\n"
-        + project_json
+        + _project_to_json(project)
         + "\n```\n\n"
         + "Produce three documents, each prefixed by a marker line on its own:\n"
         "===BUSINESS_PLAN===\n"
@@ -66,7 +62,42 @@ def generate_documents(project: "Project", *, api_key: str | None = None) -> dic
         "Each document must start with a top-level '# Title — <project name>' heading. "
         f"Write everything in {language_name}."
     )
+    return system, user_msg
 
+
+def custom_prompt(project: "Project", title: str, prompt: str) -> tuple[str, str]:
+    language_name = "French" if project.language == "fr" else "English"
+    system = (
+        "You are a senior software product manager and tech lead. Using the "
+        "project brief (JSON) as context, write the requested document in "
+        f"clean GitHub-flavored Markdown, in {language_name}. Do not invent "
+        "facts that contradict the brief. Return Markdown only, no preamble."
+    )
+    user_msg = (
+        "Project brief (JSON):\n```json\n"
+        + _project_to_json(project)
+        + "\n```\n\n"
+        + f"Document title: {title}\n\n"
+        + f"Instructions:\n{prompt or 'Write this document for the project.'}"
+    )
+    return system, user_msg
+
+
+def finalize_custom_body(body: str, title: str) -> str:
+    """Ensure a generated custom body has a heading and a trailing newline."""
+
+    if not body.lstrip().startswith("#"):
+        body = f"# {title}\n\n{body}"
+    return body.strip() + "\n"
+
+
+def generate_documents(project: "Project", *, api_key: str | None = None) -> dict[str, str]:
+    """Generate business plan, specifications and user stories via Claude."""
+
+    import anthropic
+
+    client = anthropic.Anthropic(api_key=api_key) if api_key else anthropic.Anthropic()
+    system, user_msg = documents_prompt(project)
     response = client.messages.create(
         model=DEFAULT_MODEL,
         max_tokens=MAX_TOKENS,
@@ -85,30 +116,14 @@ def generate_custom(
     import anthropic
 
     client = anthropic.Anthropic(api_key=api_key) if api_key else anthropic.Anthropic()
-    language_name = "French" if project.language == "fr" else "English"
-    system = (
-        "You are a senior software product manager and tech lead. Using the "
-        "project brief (JSON) as context, write the requested document in "
-        f"clean GitHub-flavored Markdown, in {language_name}. Do not invent "
-        "facts that contradict the brief. Return Markdown only, no preamble."
-    )
-    user_msg = (
-        "Project brief (JSON):\n```json\n"
-        + _project_to_json(project)
-        + "\n```\n\n"
-        + f"Document title: {title}\n\n"
-        + f"Instructions:\n{prompt or 'Write this document for the project.'}"
-    )
+    system, user_msg = custom_prompt(project, title, prompt)
     response = client.messages.create(
         model=DEFAULT_MODEL,
         max_tokens=MAX_TOKENS,
         system=system,
         messages=[{"role": "user", "content": user_msg}],
     )
-    body = _extract_text(response)
-    if not body.lstrip().startswith("#"):
-        body = f"# {title}\n\n{body}"
-    return body.strip() + "\n"
+    return finalize_custom_body(_extract_text(response), title)
 
 
 # ---------------------------------------------------------------------------
