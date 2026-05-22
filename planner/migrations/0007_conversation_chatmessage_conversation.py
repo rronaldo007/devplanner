@@ -24,7 +24,12 @@ def backfill_conversations(apps, schema_editor):
 
 def unbackfill(apps, schema_editor):
     ChatMessage = apps.get_model("planner", "ChatMessage")
+    Conversation = apps.get_model("planner", "Conversation")
+    # Unlink first, then drop the now-empty conversations this migration created
+    # (filtering on empty avoids cascade-deleting any messages and avoids
+    # orphaning rows on a partial re-run).
     ChatMessage.objects.filter(phase="assistant").update(conversation=None)
+    Conversation.objects.filter(messages__isnull=True).delete()
 
 
 class Migration(migrations.Migration):

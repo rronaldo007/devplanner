@@ -35,11 +35,13 @@
           {% if c.pk == active_conversation.pk %}bg-slate-800 text-white{% else %}text-slate-300 hover:bg-slate-800/60{% endif %}">
           <a href="?c={{ c.pk }}" class="min-w-0 flex-1 truncate" title="{{ c.title }}">{{ c.title }}</a>
           {% if c.pk == active_conversation.pk %}
-            <button type="button" class="conv-rename hidden shrink-0 text-slate-400 hover:text-white group-hover:inline" data-title="{{ c.title }}" title="Rename">✎</button>
+            <button type="button" aria-label="Rename conversation"
+              class="conv-rename hidden shrink-0 text-slate-400 hover:text-white group-hover:inline group-focus-within:inline" data-title="{{ c.title }}" title="Rename">✎</button>
             <form method="post" action="{% url 'planner:conversation_delete' project.pk c.pk %}" class="shrink-0"
                   onsubmit="return confirm('Delete this conversation and its messages?');">
               {% csrf_token %}
-              <button type="submit" class="hidden text-slate-400 hover:text-red-400 group-hover:inline" title="Delete">🗑</button>
+              <button type="submit" aria-label="Delete conversation"
+                class="hidden text-slate-400 hover:text-red-400 group-hover:inline group-focus-within:inline" title="Delete">🗑</button>
             </form>
           {% endif %}
         </li>
@@ -49,6 +51,21 @@
 
   <!-- Active conversation -->
   <div class="flex flex-1 flex-col rounded-xl border border-slate-800 bg-slate-900/40">
+  <!-- Mobile conversation switcher (the sidebar is hidden below md). -->
+  <div class="flex items-center gap-2 border-b border-slate-800 p-2 md:hidden">
+    <label for="conv-mobile" class="sr-only">Conversation</label>
+    <select id="conv-mobile"
+      class="min-w-0 flex-1 rounded-md border border-slate-700 bg-slate-900 px-2 py-1.5 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none">
+      {% for c in conversations %}
+        <option value="{{ c.pk }}" {% if c.pk == active_conversation.pk %}selected{% endif %}>{{ c.title }}</option>
+      {% endfor %}
+    </select>
+    <form method="post" action="{% url 'planner:conversation_new' project.pk %}" class="shrink-0">
+      {% csrf_token %}
+      <button type="submit" aria-label="New conversation"
+        class="rounded-md bg-indigo-600 px-2.5 py-1.5 text-sm font-semibold text-white hover:bg-indigo-500">+ New</button>
+    </form>
+  </div>
   <div id="chat-log" class="flex-1 space-y-4 overflow-y-auto p-5">
     {% for m in chat_messages %}
       <div class="flex {% if m.role == 'user' %}justify-end{% else %}justify-start{% endif %}">
@@ -189,6 +206,7 @@
         bubble("assistant", data.detail || "Something went wrong. Please try again.");
       } else {
         bubble("assistant", data.reply || "");
+        if (data.conversation_title) updateActiveTitle(data.conversation_title);
         if (data.has_proposal) proposalCard(data.message_id, data.proposals || []);
       }
     } catch (err) {
@@ -226,6 +244,25 @@
   });
 
   scroll();
+
+  // Reflect a server-side auto-title (first message names an untitled thread)
+  // in the sidebar link, rename button, and mobile selector without a reload.
+  function updateActiveTitle(title) {
+    const link = document.querySelector('aside a[href="?c=' + CONVERSATION_ID + '"]');
+    if (link) { link.textContent = title; link.title = title; }
+    const renameBtn = document.querySelector(".conv-rename");
+    if (renameBtn) renameBtn.dataset.title = title;
+    const opt = document.querySelector('#conv-mobile option[value="' + CONVERSATION_ID + '"]');
+    if (opt) opt.textContent = title;
+  }
+
+  // Mobile conversation switcher.
+  const mobileSelect = document.getElementById("conv-mobile");
+  if (mobileSelect) {
+    mobileSelect.addEventListener("change", function () {
+      window.location.search = "?c=" + this.value;
+    });
+  }
 
   // Rename the active conversation via the ✎ button + a hidden form.
   const renameForm = document.getElementById("conv-rename-form");
