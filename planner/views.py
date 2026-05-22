@@ -25,12 +25,35 @@ from django.urls import reverse
 from django.views.decorators.http import require_http_methods
 
 from . import generators
-from .generators import chat
+from .generators import chat, errors
 from .forms import (
     CustomDocumentForm, DocumentEditForm, InterviewForm,
     NoteForm, RegisterForm, UserProfileForm,
 )
 from .models import ChatMessage, Document, Note, Project
+
+
+# ===========================================================================
+# AI status banner (see planner/context_processors.ai_status)
+# ===========================================================================
+def _record_ai_status(request, category: str) -> None:
+    """Remember a banner-worthy AI failure (credits / auth) for this session.
+
+    Saved explicitly (like ``login()`` does) so it persists even from the JSON
+    POST endpoints regardless of middleware save behaviour.
+    """
+
+    if errors.is_persistent(category):
+        request.session["ai_status"] = category
+        request.session.save()
+
+
+def _clear_ai_status(request) -> None:
+    """Clear the AI failure flag after a successful AI call."""
+
+    if request.session.get("ai_status"):
+        del request.session["ai_status"]
+        request.session.save()
 
 
 # ===========================================================================
@@ -231,8 +254,11 @@ def project_chat_message(request, pk):
         )
     except Exception as exc:  # pragma: no cover - network/runtime safety net
         # The user's message is already saved; they can retry without retyping.
-        return JsonResponse({"error": "claude_failed", "detail": str(exc)}, status=502)
+        category, detail = errors.classify(exc)
+        _record_ai_status(request, category)
+        return JsonResponse({"error": category, "detail": detail}, status=502)
 
+    _clear_ai_status(request)
     ChatMessage.objects.create(
         project=project, role=ChatMessage.ROLE_ASSISTANT, content=result["reply"],
     )
@@ -336,8 +362,11 @@ def project_assistant_message(request, pk):
             language=project.language,
         )
     except Exception as exc:  # pragma: no cover - network/runtime safety net
-        return JsonResponse({"error": "claude_failed", "detail": str(exc)}, status=502)
+        category, detail = errors.classify(exc)
+        _record_ai_status(request, category)
+        return JsonResponse({"error": category, "detail": detail}, status=502)
 
+    _clear_ai_status(request)
     proposals = result["proposals"]
     msg = ChatMessage.objects.create(
         project=project, phase=ChatMessage.PHASE_ASSISTANT,
@@ -526,11 +555,14 @@ def document_new(request, pk):
                 is_generated=bool(prompt),
             )
             if result.get("_claude_error"):
+                category, detail = errors.classify(result["_claude_error"])
+                _record_ai_status(request, category)
                 messages.warning(
                     request,
-                    f"Claude failed, created a starter instead: {result['_claude_error']}",
+                    f"Created a starter document instead — {detail}",
                 )
             else:
+                _clear_ai_status(request)
                 messages.success(request, f"'{title}' created via {result['engine']}.")
             return HttpResponseRedirect(
                 reverse("planner:document_detail", args=[project.pk, document.pk])
