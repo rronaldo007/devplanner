@@ -47,10 +47,20 @@ class UserProfileForm(forms.ModelForm):
         model = UserProfile
         fields = ("anthropic_api_key", "default_language")
         widgets = {
+            # render_value is intentionally OFF: never reflect the stored secret
+            # back into the page HTML. The field renders empty; an empty submit
+            # keeps the existing key (see clean_anthropic_api_key).
             "anthropic_api_key": forms.PasswordInput(
-                attrs={"placeholder": "sk-ant-..."}, render_value=True,
+                attrs={"placeholder": "sk-ant-… (leave blank to keep current)"},
             ),
         }
+
+    def clean_anthropic_api_key(self):
+        submitted = (self.cleaned_data.get("anthropic_api_key") or "").strip()
+        if not submitted and self.instance and self.instance.pk:
+            # Blank means "keep the current key", not "clear it".
+            return self.instance.anthropic_api_key
+        return submitted
 
 
 # ===========================================================================
