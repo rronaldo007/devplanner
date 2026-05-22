@@ -37,6 +37,9 @@ PROPOSAL_MARKER = "===PROPOSAL==="
 # Opus model (128k). No prefill continuation: 4.x models reject assistant
 # prefill, so the turn must complete in one streamed response.
 ASSISTANT_MAX_TOKENS = int(os.environ.get("ANTHROPIC_ASSISTANT_MAX_TOKENS", "64000"))
+# OSS/Ollama models have far smaller context windows than Claude, so the
+# assistant turn gets a conservative budget on that path.
+OSS_ASSISTANT_MAX_TOKENS = int(os.environ.get("OSS_ASSISTANT_MAX_TOKENS", "4096"))
 
 # Anthropic's server-side web search tool. When enabled, Claude can look facts
 # up online (competitors, market data, common stacks) while interviewing the
@@ -212,6 +215,28 @@ def is_available(user: "AbstractBaseUser") -> bool:
     except Exception:
         return False
     return True
+
+
+def assistant_available(user: "AbstractBaseUser") -> bool:
+    """The project assistant can run if Claude is available OR OSS is configured."""
+
+    if is_available(user):
+        return True
+    from . import oss
+
+    return oss.is_configured()
+
+
+def available_models() -> dict:
+    """Models for the per-conversation AI-options dropdown.
+
+    ``{"claude": [...], "oss": [...]}`` — Claude is a static list; OSS is
+    live-queried from the configured endpoint (empty if it's down).
+    """
+
+    from . import claude, oss
+
+    return {"claude": list(claude.KNOWN_MODELS), "oss": oss.list_models()}
 
 
 # ---------------------------------------------------------------------------
@@ -418,24 +443,28 @@ def _assistant_system_prompt(language_name: str, *, web_search: bool = False) ->
 
 def assistant_turn(
     history: list[dict], context: str, *, api_key: str | None = None,
-    language: str = "en",
+    language: str = "en", provider: str = "claude", model: str | None = None,
 ) -> dict:
     """One project-assistant turn.
 
+    Routes to Claude (default) or an OpenAI-compatible OSS endpoint
+    (Ollama/OpenAI) per ``provider``; ``model`` overrides the backend default.
     Returns ``{"reply", "proposals", "summary"}``. ``proposals`` is a list of
     change dicts the user must confirm before they're applied (empty if the
     assistant only chatted).
     """
 
-    import anthropic
-
-    client = anthropic.Anthropic(api_key=api_key) if api_key else anthropic.Anthropic()
     language_name = "French" if language == "fr" else "English"
-
     messages = [{"role": m["role"], "content": m["content"]} for m in history]
     while messages and messages[0]["role"] != "user":
         messages.pop(0)
 
+    if provider == "oss":
+        return _assistant_turn_oss(messages, context, language, language_name, model)
+
+    import anthropic
+
+    client = anthropic.Anthropic(api_key=api_key) if api_key else anthropic.Anthropic()
     tools = _build_tools()
     # The system prompt + full project context is large and stable across the
     # turns of one assistant conversation, so cache it (cache_control) to cut
@@ -454,7 +483,7 @@ def assistant_turn(
     ]
 
     create_kwargs = {
-        "model": DEFAULT_MODEL,
+        "model": model or DEFAULT_MODEL,
         "max_tokens": ASSISTANT_MAX_TOKENS,
         "system": system,
         "messages": messages,
@@ -471,6 +500,44 @@ def assistant_turn(
         response = stream.get_final_message()
     text = _extract_text(response)
     truncated = getattr(response, "stop_reason", None) == "max_tokens"
+    return _finish_assistant_turn(text, language, truncated)
+
+
+def _assistant_turn_oss(
+    messages: list[dict], context: str, language: str, language_name: str,
+    model: str | None,
+) -> dict:
+    """Assistant turn via an OpenAI-compatible OSS endpoint (Ollama/OpenAI).
+
+    No tools and no prompt caching (not supported there), and a smaller token
+    budget. Proposals are best-effort: smaller models are less reliable at the
+    strict ``===PROPOSAL===`` JSON, but if one is emitted it parses the same way.
+    """
+
+    from openai import OpenAI
+
+    from . import oss
+
+    cfg = oss.config()
+    system_text = (
+        _assistant_system_prompt(language_name, web_search=False)
+        + "\n\n# CURRENT PROJECT CONTEXT\n"
+        + context
+    )
+    client = OpenAI(base_url=cfg["base_url"], api_key=cfg["api_key"])
+    response = client.chat.completions.create(
+        model=model or cfg["model"],
+        max_tokens=OSS_ASSISTANT_MAX_TOKENS,
+        messages=[{"role": "system", "content": system_text}] + messages,
+    )
+    choice = response.choices[0]
+    text = (choice.message.content or "").strip()
+    truncated = getattr(choice, "finish_reason", None) == "length"
+    return _finish_assistant_turn(text, language, truncated)
+
+
+def _finish_assistant_turn(text: str, language: str, truncated: bool) -> dict:
+    """Shared post-processing for a raw assistant response (both backends)."""
 
     proposals, summary = _parse_proposal(text)
     reply = text

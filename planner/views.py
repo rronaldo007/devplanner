@@ -342,10 +342,11 @@ def project_assistant(request, pk):
     project = _owned_project(request, pk)
     if project.is_draft:
         return HttpResponseRedirect(reverse("planner:project_chat", args=[project.pk]))
-    if not chat.is_available(request.user):
+    if not chat.assistant_available(request.user):
         messages.info(
             request,
-            "The project assistant needs an Anthropic API key — add one in Settings.",
+            "The project assistant needs an Anthropic API key (add one in Settings) "
+            "or a configured local/OSS model.",
         )
         return HttpResponseRedirect(reverse("planner:project_detail", args=[project.pk]))
 
@@ -366,6 +367,8 @@ def project_assistant(request, pk):
             "conversations": project.conversations.all(),
             "active_conversation": conversation,
             "chat_messages": conversation.messages.all(),
+            "model_options": chat.available_models(),
+            "provider_choices": Conversation.PROVIDER_CHOICES,
         },
     )
 
@@ -402,6 +405,22 @@ def conversation_delete(request, pk, conv_pk):
 
 @require_http_methods(["POST"])
 @login_required
+def conversation_set_model(request, pk, conv_pk):
+    """Set the AI provider + model for a conversation."""
+
+    project = _owned_project(request, pk)
+    conversation = get_object_or_404(Conversation, pk=conv_pk, project=project)
+    provider = request.POST.get("provider")
+    model = (request.POST.get("model") or "").strip()
+    if provider in dict(Conversation.PROVIDER_CHOICES):
+        conversation.provider = provider
+        conversation.model = model[:100]
+        conversation.save(update_fields=["provider", "model", "updated_at"])
+    return _assistant_redirect(project, conversation)
+
+
+@require_http_methods(["POST"])
+@login_required
 def project_assistant_message(request, pk):
     """One project-assistant turn (JSON in, JSON out).
 
@@ -412,7 +431,7 @@ def project_assistant_message(request, pk):
     project = _owned_project(request, pk)
     if project.is_draft:
         return JsonResponse({"error": "draft"}, status=409)
-    if not chat.is_available(request.user):
+    if not chat.assistant_available(request.user):
         return JsonResponse({"error": "chat_unavailable"}, status=409)
 
     try:
@@ -441,11 +460,32 @@ def project_assistant_message(request, pk):
         for m in conversation.messages.all()
     ]
     context = chat.build_project_context(project)
+    # Route to the conversation's chosen backend.
+    if conversation.provider == Conversation.PROVIDER_OSS:
+        from .generators import oss
+
+        if not oss.is_configured():
+            return JsonResponse({
+                "error": "oss_unconfigured",
+                "detail": "This conversation uses a local/OSS model, but no OSS "
+                          "endpoint is configured (set OSS_BASE_URL / OSS_MODEL).",
+            }, status=409)
+        turn_kwargs = {"provider": "oss", "model": conversation.model or None}
+    else:
+        if not chat.is_available(request.user):
+            return JsonResponse({
+                "error": "chat_unavailable",
+                "detail": "This conversation uses Claude, but no Anthropic API key "
+                          "is configured. Add one in Settings or switch the model to OSS.",
+            }, status=409)
+        turn_kwargs = {
+            "provider": "claude",
+            "api_key": chat.api_key_for_user(request.user),
+            "model": conversation.model or None,
+        }
     try:
         result = chat.assistant_turn(
-            history, context,
-            api_key=chat.api_key_for_user(request.user),
-            language=project.language,
+            history, context, language=project.language, **turn_kwargs,
         )
     except Exception as exc:  # pragma: no cover - network/runtime safety net
         category, detail = errors.classify(exc)

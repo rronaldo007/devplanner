@@ -47,10 +47,29 @@ def config() -> dict[str, str]:
 
 
 def is_configured() -> bool:
-    """True when enough config is present to attempt an OSS call."""
+    """True when enough config is present to attempt an OSS call (base_url + model)."""
 
     cfg = config()
     return bool(cfg["base_url"] and cfg["model"])
+
+
+def list_models(timeout: float = 4.0) -> list[str]:
+    """Live list of model ids from the configured OSS endpoint.
+
+    Returns ``[]`` on any failure (endpoint down/misconfigured) so callers can
+    degrade gracefully to a static list.
+    """
+
+    cfg = config()
+    if not cfg["base_url"]:
+        return []
+    try:
+        from openai import OpenAI
+
+        client = OpenAI(base_url=cfg["base_url"], api_key=cfg["api_key"], timeout=timeout)
+        return sorted(m.id for m in client.models.list().data)
+    except Exception:
+        return []
 
 
 def _client(base_url: str, api_key: str):

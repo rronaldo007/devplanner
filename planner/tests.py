@@ -2195,3 +2195,98 @@ class GenerationBannerTests(TestCase):
         )
         self.assertEqual(resp.status_code, 302)
         self.assertIsNone(self.client.session.get("ai_status"))  # diagrams don't use AI
+
+
+# ===========================================================================
+# Per-conversation AI options (provider + model)
+# ===========================================================================
+class ConversationAiOptionsTests(TestCase):
+    def setUp(self):
+        self.user = _make_user(api_key="")  # no Claude key
+        self.client.force_login(self.user)
+        self.project = _make_project(self.user)
+        self._orig_anthropic = sys.modules.get("anthropic")
+        self._orig_openai = sys.modules.get("openai")
+        self._env = mock.patch.dict(os.environ, _OSS_ENV)
+        self._env.start()
+
+    def tearDown(self):
+        self._env.stop()
+        for name, orig in (("anthropic", self._orig_anthropic), ("openai", self._orig_openai)):
+            if orig is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = orig
+
+    def _post(self, conv, message="hi"):
+        return self.client.post(
+            reverse("planner:project_assistant_message", args=[self.project.pk]),
+            data=json.dumps({"message": message, "conversation_id": conv.pk}),
+            content_type="application/json",
+        )
+
+    def test_assistant_turn_oss_path_plain_reply(self):
+        _install_openai_stub("Here is my answer.")
+        res = chat_mod.assistant_turn(
+            [{"role": "user", "content": "hi"}], "ctx",
+            provider="oss", model="gemma4:26b",
+        )
+        self.assertEqual(res["reply"], "Here is my answer.")
+        self.assertEqual(res["proposals"], [])
+
+    def test_assistant_turn_oss_parses_proposal(self):
+        text = (
+            "I'll update it.\n" + chat_mod.PROPOSAL_MARKER + "\n"
+            + json.dumps({"summary": "x", "changes": [
+                {"type": "field", "field": "stack", "value": "Django"}]})
+        )
+        _install_openai_stub(text)
+        res = chat_mod.assistant_turn(
+            [{"role": "user", "content": "go"}], "ctx",
+            provider="oss", model="gemma4:26b",
+        )
+        self.assertEqual(len(res["proposals"]), 1)
+
+    def test_oss_conversation_works_without_claude_key(self):
+        _install_openai_stub("OSS reply")
+        conv = self.project.conversations.create(
+            title="t", provider="oss", model="gemma4:26b",
+        )
+        resp = self._post(conv)
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["reply"], "OSS reply")
+
+    def test_oss_conversation_without_endpoint_errors(self):
+        keyed = _make_user(username="keyed", api_key="sk-claude")
+        self.client.force_login(keyed)
+        project = _make_project(keyed)
+        conv = project.conversations.create(title="t", provider="oss")
+        _install_anthropic_stub("x")
+        with mock.patch.dict(os.environ, {"OSS_BASE_URL": "", "OSS_MODEL": ""}):
+            resp = self.client.post(
+                reverse("planner:project_assistant_message", args=[project.pk]),
+                data=json.dumps({"message": "hi", "conversation_id": conv.pk}),
+                content_type="application/json",
+            )
+        self.assertEqual(resp.status_code, 409)
+        self.assertEqual(resp.json()["error"], "oss_unconfigured")
+
+    def test_set_model_updates_conversation(self):
+        conv = self.project.conversations.create(title="t")
+        resp = self.client.post(
+            reverse("planner:conversation_set_model", args=[self.project.pk, conv.pk]),
+            {"provider": "oss", "model": "gemma4:26b"},
+        )
+        self.assertEqual(resp.status_code, 302)
+        conv.refresh_from_db()
+        self.assertEqual(conv.provider, "oss")
+        self.assertEqual(conv.model, "gemma4:26b")
+
+    def test_assistant_page_available_via_oss_without_key(self):
+        _install_openai_stub("x")
+        resp = self.client.get(reverse("planner:project_assistant", args=[self.project.pk]))
+        self.assertEqual(resp.status_code, 200)
+
+    def test_assistant_available_helper(self):
+        # No Claude key, but OSS configured.
+        self.assertTrue(chat_mod.assistant_available(self.user))
